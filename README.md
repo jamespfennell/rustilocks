@@ -1,6 +1,7 @@
 # Rustilocks
 
-Rust implemention of the Lox bytecode intepreter in Crafting Interpreters.
+Rust implemention of the Lox bytecode intepreter in the book
+    [Crafting Interpreters](https://craftinginterpreters.com/).
 
 ## Goals
 
@@ -8,7 +9,7 @@ Rust implemention of the Lox bytecode intepreter in Crafting Interpreters.
 
 - Gain more experience with Rust.
 
-- Use only safe Rust and try to write code to be panic-free.
+- Try to make all code safe and statically panic-free.
 
 ## Non-goals
 
@@ -18,8 +19,8 @@ Rust implemention of the Lox bytecode intepreter in Crafting Interpreters.
 
 ## Status
 
-- Chapter 14-15: done
+- Chapter 14-16: done
 
-- Chapter 16: in progress.
+- Chapter 17: in progress.
 
-- Chapter 17-30: to be started
+- Chapter 18-29: to be started

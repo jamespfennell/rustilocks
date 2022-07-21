@@ -1,5 +1,6 @@
 mod chunk;
 mod error;
+mod scanner;
 mod value;
 mod vm;
 
