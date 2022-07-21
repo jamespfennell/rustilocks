@@ -1,4 +1,4 @@
-# rustilocks
+# Rustilocks
 
 Rust implemention of the Lox bytecode intepreter in Crafting Interpreters.
 
@@ -18,6 +18,8 @@ Rust implemention of the Lox bytecode intepreter in Crafting Interpreters.
 
 ## Status
 
-- Chapter 14: in progress.
+- Chapter 14-15: done
 
-- Chapter 15-30: to be started
+- Chapter 16: in progress.
+
+- Chapter 17-30: to be started

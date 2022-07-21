@@ -1,11 +1,15 @@
 mod chunk;
+mod error;
 mod value;
+mod vm;
 
 fn main() {
     let ops = vec![
-        chunk::Op::Return,
         chunk::Op::Constant(0),
-        chunk::Op::Constant(1),
+        chunk::Op::Negate,
+        chunk::Op::Constant(0),
+        chunk::Op::Multiply,
+        chunk::Op::Return,
     ];
     let mut bytecode = vec![];
     for op in &ops {
@@ -16,4 +20,5 @@ fn main() {
         constants: vec![value::Value::Number(0.1)],
     };
     chunk.disassemble().unwrap();
+    vm::run(&chunk).unwrap();
 }
