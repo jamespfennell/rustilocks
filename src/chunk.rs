@@ -1,12 +1,28 @@
+use std::collections::HashMap;
+
 use crate::error::Error;
 use crate::value::Value;
 
+#[derive(bincode::Decode, bincode::Encode)]
 pub struct Chunk {
     pub bytecode: Vec<u8>,
     pub constants: Vec<Value>,
 }
 
 impl Chunk {
+    pub fn serialize(&self) -> Result<Vec<u8>, ()> {
+        match bincode::encode_to_vec(self, bincode::config::standard()) {
+            Ok(v) => Ok(v),
+            Err(_) => Err(()),
+        }
+    }
+
+    pub fn deserialize(src: &[u8]) -> Chunk {
+        let (chunk, _): (Chunk, _) =
+            bincode::decode_from_slice(src, bincode::config::standard()).unwrap();
+        chunk
+    }
+
     pub fn disassemble(&self) -> Result<(), Error> {
         println!("%%%% chunk %%%%");
         let mut ip: &[u8] = &self.bytecode;
@@ -16,6 +32,46 @@ impl Chunk {
             ip = new_ip;
         }
         Ok(())
+    }
+
+    pub fn assemble(source: &str) -> Chunk {
+        let mut label_to_offset: HashMap<&str, usize> = HashMap::new();
+        let mut bytecode = vec![];
+        let mut constants = vec![];
+        for line in source.lines() {
+            let line = match line.find('%') {
+                None => line,
+                Some(i) => &line[..i],
+            };
+            let words: Vec<&str> = line.split_whitespace().collect();
+            if words.is_empty() {
+                continue;
+            }
+            label_to_offset.insert(words[0], bytecode.len());
+            let op = match words[1] {
+                "ADD" => Op::Add,
+                "CONSTANT" => {
+                    let raw_value = words[2];
+                    match raw_value.chars().next().unwrap() {
+                        '0'..='9' => {
+                            constants.push(Value::Number(raw_value.parse::<f64>().unwrap()));
+                            Op::Constant((constants.len() - 1) as u8)
+                        }
+                        _ => panic!("could not read constant"),
+                    }
+                }
+                "MULTIPLY" => Op::Multiply,
+                "NEGATE" => Op::Negate,
+                "RETURN" => Op::Return,
+                "SUBTRACT" => Op::Subtract,
+                _ => panic!("unknown command {}", words[1]),
+            };
+            op.write(&mut bytecode);
+        }
+        Chunk {
+            bytecode,
+            constants,
+        }
     }
 }
 
@@ -79,7 +135,7 @@ impl Op {
                     "CONSTANT {}",
                     match constants.get(*i as usize) {
                         None => format!("{} <invalid: only {} constants>", *i, constants.len()),
-                        Some(value) => format!("{} '{}'", *i, value),
+                        Some(value) => format!("{} %index={}", value, *i),
                     }
                 )
             }

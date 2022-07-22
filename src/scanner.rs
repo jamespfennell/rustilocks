@@ -4,7 +4,7 @@ pub struct Scanner<'a> {
 
 impl<'a> Scanner<'a> {
     pub fn scan(&mut self) -> Result<Option<Token<'a>>, ScannerError<'a>> {
-        self.skip_whitespace();
+        self.source = skip_whitespace(self.source);
         let mut chars = self.source.chars();
         let c = match chars.next() {
             None => return Ok(None),
@@ -104,33 +104,33 @@ impl<'a> Scanner<'a> {
         self.source = &self.source[len..];
         Ok(Some(Token::new(token_type, token_text)))
     }
+}
 
-    fn skip_whitespace(&mut self) {
-        let mut chars = self.source.chars();
-        let mut bytes_to_skip = 0;
-        while let Some(c) = chars.next() {
-            match c {
-                ' ' | '\r' | '\t' | '\n' => {
-                    bytes_to_skip += 1;
-                }
-                '/' => {
-                    if chars.next() == Some('/') {
-                        bytes_to_skip += 2;
-                        while let Some(c) = chars.next() {
-                            bytes_to_skip += c.len_utf8();
-                            if c == '\n' {
-                                break;
-                            }
-                        }
-                    } else {
-                        break;
-                    }
-                }
-                _ => break,
+fn skip_whitespace(source: &str) -> &str {
+    let mut chars = source.chars();
+    let mut bytes_to_skip = 0;
+    while let Some(c) = chars.next() {
+        match c {
+            ' ' | '\r' | '\t' | '\n' => {
+                bytes_to_skip += 1;
             }
+            '/' => {
+                if chars.next() == Some('/') {
+                    bytes_to_skip += 2;
+                    while let Some(c) = chars.next() {
+                        bytes_to_skip += c.len_utf8();
+                        if c == '\n' {
+                            break;
+                        }
+                    }
+                } else {
+                    break;
+                }
+            }
+            _ => break,
         }
-        self.source = &self.source[bytes_to_skip..];
     }
+    &source[bytes_to_skip..]
 }
 
 fn identifier_token_type(name: &str) -> TokenType {
