@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-#[derive(Clone, bincode::Decode, bincode::Encode)]
+#[derive(PartialEq, Clone, Debug, bincode::Decode, bincode::Encode)]
 pub enum Value {
     Number(f64),
 }

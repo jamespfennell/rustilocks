@@ -1,6 +1,6 @@
 # Rustilocks
 
-Rust implemention of the Lox bytecode intepreter in the book
+Rust implemention of the Lox bytecode intepreter in Robert Nystrom's book
     [Crafting Interpreters](https://craftinginterpreters.com/).
 
 This is a Rust binary crate built with the clap CLI library, so `cargo run help`
@@ -31,8 +31,8 @@ The binary operates on 3 file formats:
 
 ## Status
 
-- Chapter 14-16: done
+- Chapter 14-17: done
 
-- Chapter 17: in progress.
+- Chapter 18: in progress.
 
-- Chapter 18-29: to be started
+- Chapter 19-29: to be started

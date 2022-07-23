@@ -1,9 +1,36 @@
 pub struct Scanner<'a> {
     pub source: &'a str,
+    cache: Option<Token<'a>>,
 }
 
 impl<'a> Scanner<'a> {
-    pub fn scan(&mut self) -> Result<Option<Token<'a>>, ScannerError<'a>> {
+    pub fn new(src: &'a str) -> Scanner<'a> {
+        Scanner {
+            source: src,
+            cache: None,
+        }
+    }
+
+    pub fn next(&mut self) -> Result<Option<Token<'a>>, ScannerError<'a>> {
+        match self.cache.take() {
+            None => self.scan(),
+            Some(token) => Ok(Some(token)),
+        }
+    }
+
+    pub fn peek(&mut self) -> Result<Option<Token<'a>>, ScannerError<'a>> {
+        if self.cache.is_none() {
+            self.cache = self.scan()?;
+        }
+        Ok(self.cache.clone())
+    }
+
+    pub fn consume(&mut self) -> Result<(), ScannerError<'a>> {
+        self.next()?;
+        Ok(())
+    }
+
+    fn scan(&mut self) -> Result<Option<Token<'a>>, ScannerError<'a>> {
         self.source = skip_whitespace(self.source);
         let mut chars = self.source.chars();
         let c = match chars.next() {
@@ -175,7 +202,7 @@ pub enum ScannerError<'a> {
     UnterminatedString(&'a str),
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub struct Token<'a> {
     pub token_type: TokenType,
     pub source: &'a str,
@@ -187,53 +214,53 @@ impl<'a> Token<'a> {
     }
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub enum TokenType {
     // Single-character tokens
-    LeftParen,
-    RightParen,
-    LeftBrace,
-    RightBrace,
-    Comma,
-    Dot,
-    Minus,
-    Plus,
-    Semicolon,
-    Slash,
-    Star,
+    LeftParen = 0,
+    RightParen = 1,
+    LeftBrace = 2,
+    RightBrace = 3,
+    Comma = 4,
+    Dot = 5,
+    Minus = 6,
+    Plus = 7,
+    Semicolon = 8,
+    Slash = 9,
+    Star = 10,
 
     // One or two character tokens
-    Bang,
-    BangEqual,
-    Equal,
-    EqualEqual,
-    Greater,
-    GreaterEqual,
-    Less,
-    LessEqual,
+    Bang = 11,
+    BangEqual = 12,
+    Equal = 13,
+    EqualEqual = 14,
+    Greater = 15,
+    GreaterEqual = 16,
+    Less = 17,
+    LessEqual = 18,
 
     // Literals
-    Identifier,
-    String,
-    Number,
+    Identifier = 19,
+    String = 20,
+    Number = 21,
 
     // Keywords
-    And,
-    Class,
-    Else,
-    False,
-    For,
-    Fun,
-    If,
-    Nil,
-    Or,
-    Print,
-    Return,
-    Super,
-    This,
-    True,
-    Var,
-    While,
+    And = 22,
+    Class = 23,
+    Else = 24,
+    False = 25,
+    For = 26,
+    Fun = 27,
+    If = 28,
+    Nil = 29,
+    Or = 30,
+    Print = 31,
+    Return = 32,
+    Super = 33,
+    This = 34,
+    True = 35,
+    Var = 36,
+    While = 37,
 }
 
 #[cfg(test)]
@@ -244,7 +271,7 @@ mod tests {
         ($name: ident, $input: expr, $output: expr) => {
             #[test]
             fn $name() {
-                let mut scanner = Scanner { source: $input };
+                let mut scanner = Scanner::new($input);
                 let mut got = vec![];
                 while let Some(token) = scanner.scan().unwrap() {
                     got.push(token);

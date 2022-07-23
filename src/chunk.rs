@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use crate::error::Error;
 use crate::value::Value;
 
-#[derive(bincode::Decode, bincode::Encode)]
+#[derive(bincode::Decode, bincode::Encode, Debug)]
 pub struct Chunk {
     pub bytecode: Vec<u8>,
     pub constants: Vec<Value>,
@@ -163,6 +163,7 @@ impl Op {
 }
 
 /// OpCode is the code for a single instruction in Lox.
+/// TODO: make C style?
 #[derive(PartialEq, Eq, Debug, Copy, Clone)]
 pub enum OpCode {
     Constant,

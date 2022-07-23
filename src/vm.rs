@@ -23,8 +23,9 @@ macro_rules! pop_one {
 
 macro_rules! pop_two {
     ($value_stack: ident, $op: expr) => {{
-        let a = pop_one!($value_stack, $op, 2, 0);
+        // It's a stack so the values are in reverse order
         let b = pop_one!($value_stack, $op, 2, 1);
+        let a = pop_one!($value_stack, $op, 2, 0);
         (a, b)
     }};
 }
@@ -81,4 +82,12 @@ pub fn run(chunk: &chunk::Chunk) -> Result<(), Error> {
         ip = new_ip;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_subtractino() {}
 }

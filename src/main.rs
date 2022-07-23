@@ -1,4 +1,5 @@
 mod chunk;
+mod compiler;
 mod error;
 mod scanner;
 mod value;
@@ -50,12 +51,11 @@ fn main() {
     let cli = Cli::parse();
     match cli.command {
         Command::Compile { input, output } => {
-            let source_code = match InputFile::read(&input) {
-                InputFile::Lox(_) => panic!("can't compile .lox files (yet)"),
-                InputFile::Assembly(s) => s,
+            let chunk = match InputFile::read(&input) {
+                InputFile::Lox(src) => compiler::compile(&src).unwrap(),
+                InputFile::Assembly(src) => chunk::Chunk::assemble(&src),
                 InputFile::Binary(_) => panic!("can't compile .rlks files"),
             };
-            let chunk = chunk::Chunk::assemble(&source_code);
             let output = match output {
                 None => {
                     let mut output = input.clone();
@@ -73,13 +73,14 @@ fn main() {
                 InputFile::Binary(src) => chunk::Chunk::deserialize(&src),
             };
             chunk.disassemble().unwrap();
-        },
+        }
         Command::Run { input } => {
             let chunk = match InputFile::read(&input) {
-                InputFile::Lox(_) => panic!("can't run .lox files (yet)"),
+                InputFile::Lox(src) => compiler::compile(&src).unwrap(),
                 InputFile::Assembly(s) => chunk::Chunk::assemble(&s),
                 InputFile::Binary(src) => chunk::Chunk::deserialize(&src),
             };
+            println!("{:?}", chunk);
             vm::run(&chunk).unwrap();
         }
         Command::Tokenize { input } => {
@@ -88,10 +89,8 @@ fn main() {
                 InputFile::Assembly(_) => panic!("can't tokenize .loxa files"),
                 InputFile::Binary(_) => panic!("can't tokenize .rlks files"),
             };
-            let mut scanner = scanner::Scanner {
-                source: &source_code,
-            };
-            while let Some(token) = scanner.scan().unwrap() {
+            let mut scanner = scanner::Scanner::new(&source_code);
+            while let Some(token) = scanner.next().unwrap() {
                 println!("{:?}", token)
             }
         }
