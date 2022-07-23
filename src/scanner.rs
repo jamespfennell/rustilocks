@@ -1,5 +1,7 @@
+use crate::error::ScannerError;
+
 pub struct Scanner<'a> {
-    pub source: &'a str,
+    source: &'a str,
     cache: Option<Token<'a>>,
 }
 
@@ -11,26 +13,26 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    pub fn next(&mut self) -> Result<Option<Token<'a>>, ScannerError<'a>> {
+    pub fn next(&mut self) -> Result<Option<Token<'a>>, Box<ScannerError<'a>>> {
         match self.cache.take() {
             None => self.scan(),
             Some(token) => Ok(Some(token)),
         }
     }
 
-    pub fn peek(&mut self) -> Result<Option<Token<'a>>, ScannerError<'a>> {
+    pub fn peek(&mut self) -> Result<Option<Token<'a>>, Box<ScannerError<'a>>> {
         if self.cache.is_none() {
             self.cache = self.scan()?;
         }
         Ok(self.cache.clone())
     }
 
-    pub fn consume(&mut self) -> Result<(), ScannerError<'a>> {
+    pub fn consume(&mut self) -> Result<(), Box<ScannerError<'a>>> {
         self.next()?;
         Ok(())
     }
 
-    fn scan(&mut self) -> Result<Option<Token<'a>>, ScannerError<'a>> {
+    fn scan(&mut self) -> Result<Option<Token<'a>>, Box<ScannerError<'a>>> {
         self.source = skip_whitespace(self.source);
         let mut chars = self.source.chars();
         let c = match chars.next() {
@@ -81,7 +83,9 @@ impl<'a> Scanner<'a> {
                 let mut len = 1;
                 loop {
                     match chars.next() {
-                        None => return Err(ScannerError::UnterminatedString(self.source)),
+                        None => {
+                            return Err(Box::new(ScannerError::UnterminatedString(self.source)))
+                        }
                         Some('"') => break,
                         Some(c) => {
                             len += c.len_utf8();
@@ -125,7 +129,7 @@ impl<'a> Scanner<'a> {
                 }
                 (identifier_token_type(&self.source[..len]), len)
             }
-            _ => return Err(ScannerError::InvalidCharacter(self.source)),
+            _ => return Err(Box::new(ScannerError::InvalidCharacter(self.source))),
         };
         let token_text = &self.source[..len];
         self.source = &self.source[len..];
@@ -194,12 +198,6 @@ fn identifier_token_type(name: &str) -> TokenType {
         Some('w') => check_keyword("while", TokenType::While),
         _ => TokenType::Identifier,
     }
-}
-
-#[derive(Debug)]
-pub enum ScannerError<'a> {
-    InvalidCharacter(&'a str),
-    UnterminatedString(&'a str),
 }
 
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
@@ -273,7 +271,7 @@ mod tests {
             fn $name() {
                 let mut scanner = Scanner::new($input);
                 let mut got = vec![];
-                while let Some(token) = scanner.scan().unwrap() {
+                while let Some(token) = scanner.scan().expect("valid token") {
                     got.push(token);
                 }
                 assert_eq!($output, got);

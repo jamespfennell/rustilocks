@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use crate::error::Error;
+use crate::error::InvalidBytecodeError;
 use crate::value::Value;
 
 #[derive(bincode::Decode, bincode::Encode, Debug)]
@@ -23,7 +23,7 @@ impl Chunk {
         chunk
     }
 
-    pub fn disassemble(&self) -> Result<(), Error> {
+    pub fn disassemble(&self) -> Result<(), InvalidBytecodeError> {
         println!("%%%% chunk %%%%");
         let mut ip: &[u8] = &self.bytecode;
         while !ip.is_empty() {
@@ -90,19 +90,21 @@ pub enum Op {
 impl Op {
     /// Read reads the first op from the provided bytecode and returns the op
     /// and a pointer to code after the op.
-    pub fn read(b: &[u8]) -> Result<(Op, &[u8]), Error> {
+    pub fn read(b: &[u8]) -> Result<(Op, &[u8]), InvalidBytecodeError> {
         let (i, mut tail) = match b.split_first() {
-            None => return Err(Error::EmptyBytecode),
+            None => return Err(InvalidBytecodeError::EmptyBytecode),
             Some((i, tail)) => (*i, tail),
         };
         let op_code = match OpCode::try_from(i) {
-            Err(()) => return Err(Error::UnknownOpCode { code: i }),
+            Err(()) => return Err(InvalidBytecodeError::UnknownOpCode { code: i }),
             Ok(op_code) => op_code,
         };
         let op = match op_code {
             OpCode::Constant => {
                 let (i, new_tail) = match tail.split_first() {
-                    None => return Err(Error::MissingOpArgument { op_code: op_code }),
+                    None => {
+                        return Err(InvalidBytecodeError::MissingOpArgument { op_code: op_code })
+                    }
                     Some((i, tail)) => (*i, tail),
                 };
                 tail = new_tail;

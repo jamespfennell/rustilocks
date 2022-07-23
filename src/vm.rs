@@ -1,6 +1,6 @@
 use crate::chunk;
 use crate::chunk::Op;
-use crate::error::Error;
+use crate::error::InvalidBytecodeError;
 use crate::value::Value;
 
 macro_rules! pop_one {
@@ -10,7 +10,7 @@ macro_rules! pop_one {
     ($value_stack: ident, $op: expr, $needed: expr, $actual: expr) => {
         match $value_stack.pop() {
             None => {
-                return Err(Error::ValueStackTooSmall {
+                return Err(InvalidBytecodeError::ValueStackTooSmall {
                     op: $op,
                     stack_size_needed: $needed,
                     stack_size_actual: $actual,
@@ -30,7 +30,7 @@ macro_rules! pop_two {
     }};
 }
 
-pub fn run(chunk: &chunk::Chunk) -> Result<(), Error> {
+pub fn run(chunk: &chunk::Chunk) -> Result<(), InvalidBytecodeError> {
     let mut ip: &[u8] = &chunk.bytecode;
     let mut value_stack = vec![];
     while !ip.is_empty() {
@@ -40,7 +40,7 @@ pub fn run(chunk: &chunk::Chunk) -> Result<(), Error> {
             Op::Constant(i) => {
                 let value = match chunk.constants.get(i as usize) {
                     None => {
-                        return Err(Error::InvalidConstantIndex {
+                        return Err(InvalidBytecodeError::InvalidConstantIndex {
                             op: op,
                             num_constants: chunk.constants.len(),
                         })

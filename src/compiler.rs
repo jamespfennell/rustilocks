@@ -1,9 +1,10 @@
 use crate::chunk;
 use crate::chunk::Op;
+use crate::error::CompilationError;
 use crate::scanner::{self, Token, TokenType};
 use crate::value::Value;
 
-pub fn compile(src: &str) -> Result<chunk::Chunk, &str> {
+pub fn compile(src: &str) -> Result<chunk::Chunk, Box<CompilationError>> {
     let mut compiler = Compiler {
         scanner: scanner::Scanner::new(src),
         chunk: chunk::Chunk {
@@ -11,7 +12,7 @@ pub fn compile(src: &str) -> Result<chunk::Chunk, &str> {
             constants: vec![],
         },
     };
-    compiler.parse_precendence(Precedence::Assignment);
+    compiler.parse_precendence(Precedence::Assignment)?;
     compiler.emit_op(Op::Return);
     Ok(compiler.chunk)
 }
@@ -22,17 +23,24 @@ struct Compiler<'a> {
 }
 
 impl<'a> Compiler<'a> {
-    fn parse_precendence(&mut self, precedence: Precedence) {
-        let token = match self.scanner.next().unwrap() {
-            None => return,
+    fn parse_precendence(
+        &mut self,
+        precedence: Precedence,
+    ) -> Result<(), Box<CompilationError<'a>>> {
+        let token = match self.scanner.next()? {
+            None => return Ok(()),
             Some(token) => token,
         };
         let (prefix_rule, _, _) = get_rules(token.token_type);
-        prefix_rule.unwrap()(self, token);
+        let prefix_rule = match prefix_rule {
+            None => return Err(Box::new(CompilationError::UnexpectedToken(token, "expected a prefix token"))),
+            Some(prefix_rule) => prefix_rule,
+        };
+        prefix_rule(self, token)?;
 
         loop {
-            let token = match self.scanner.peek().unwrap() {
-                None => return,
+            let token = match self.scanner.peek()? {
+                None => break,
                 Some(token) => token,
             };
             let (_, infix_rule, infix_precedence) = get_rules(token.token_type);
@@ -44,21 +52,26 @@ impl<'a> Compiler<'a> {
                 None => break,
                 Some(infix_rule) => infix_rule,
             };
-            self.scanner.consume().unwrap();
-            infix_rule(self, token);
+            self.scanner.consume()?;
+            infix_rule(self, token)?;
         }
+        Ok(())
     }
 
     fn emit_op(&mut self, op: Op) {
         op.write(&mut self.chunk.bytecode);
     }
 
-    fn emit_constant(&mut self, constant: Value) -> u8 {
+    fn emit_constant(
+        &mut self,
+        token: Token<'a>,
+        constant: Value,
+    ) -> Result<u8, Box<CompilationError<'a>>> {
         let i = self.chunk.constants.len();
         self.chunk.constants.push(constant);
         match i.try_into() {
-            Ok(i) => i,
-            Err(_) => panic!("too many constants"),
+            Ok(i) => Ok(i),
+            Err(_) => Err(Box::new(CompilationError::TooManyConstants(token))),
         }
     }
 }
@@ -78,9 +91,11 @@ enum Precedence {
     Primary = 10,
 }
 
-type ParseRule = fn(s: &mut Compiler, Token);
+type ParseRule<'a> = fn(s: &mut Compiler<'a>, Token<'a>) -> Result<(), Box<CompilationError<'a>>>;
 
-fn get_rules(token_type: TokenType) -> (Option<ParseRule>, Option<ParseRule>, Precedence) {
+fn get_rules<'a>(
+    token_type: TokenType,
+) -> (Option<ParseRule<'a>>, Option<ParseRule<'a>>, Precedence) {
     match token_type {
         TokenType::LeftParen => (Some(prefix_left_paren), None, Precedence::None),
         TokenType::RightParen => (None, None, Precedence::None),
@@ -93,41 +108,63 @@ fn get_rules(token_type: TokenType) -> (Option<ParseRule>, Option<ParseRule>, Pr
     }
 }
 
-fn infix_minus(c: &mut Compiler, _: Token) {
-    c.parse_precendence(Precedence::Factor);
+fn infix_minus<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
+    c.parse_precendence(Precedence::Factor)?;
     c.emit_op(Op::Subtract);
+    Ok(())
 }
 
-fn infix_number(s: &mut Compiler, token: Token) {
-    let i = s.emit_constant(Value::Number(token.source.parse::<f64>().unwrap()));
+fn infix_number<'a>(
+    s: &mut Compiler<'a>,
+    token: Token<'a>,
+) -> Result<(), Box<CompilationError<'a>>> {
+    let d = match token.source.parse::<f64>() {
+        Ok(d) => d,
+        Err(_) => return Err(Box::new(CompilationError::InvalidNumber(token))),
+    };
+    let i = s.emit_constant(token,  Value::Number(d))?;
     s.emit_op(Op::Constant(i));
+    Ok(())
 }
 
-fn infix_plus(c: &mut Compiler, _: Token) {
-    c.parse_precendence(Precedence::Factor);
+fn infix_plus<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
+    c.parse_precendence(Precedence::Factor)?;
     c.emit_op(Op::Add);
+    Ok(())
 }
 
-fn infix_slash(c: &mut Compiler, _: Token) {
-    c.parse_precendence(Precedence::Unary);
+fn infix_slash<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
+    c.parse_precendence(Precedence::Unary)?;
     c.emit_op(Op::Divide);
+    Ok(())
 }
 
-fn infix_star(c: &mut Compiler, _: Token) {
-    c.parse_precendence(Precedence::Unary);
+fn infix_star<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
+    c.parse_precendence(Precedence::Unary)?;
     c.emit_op(Op::Multiply);
+    Ok(())
 }
 
-fn prefix_left_paren(c: &mut Compiler, _: Token) {
-    c.parse_precendence(Precedence::Assignment);
-    if c.scanner.next().unwrap().unwrap().token_type != TokenType::RightParen {
-        panic!("grouping not matched");
+fn prefix_left_paren<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
+    c.parse_precendence(Precedence::Assignment)?;
+    match c.scanner.next()? {
+        None => Err(Box::new(CompilationError::MissingToken(
+            "expected a closing parenthesis",
+        ))),
+        Some(t) => match t.token_type {
+            TokenType::RightParen => Ok(()),
+            _ => Err(Box::new(CompilationError::UnexpectedToken(
+                t,
+                "expected a closing parenthesis",
+            ))),
+        },
     }
 }
 
-fn prefix_minus(c: &mut Compiler, _: Token) {
-    c.parse_precendence(Precedence::Unary);
+fn prefix_minus<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
+    c.parse_precendence(Precedence::Unary)?;
     c.emit_op(Op::Negate);
+    Ok(())
 }
 
 #[cfg(test)]
@@ -220,7 +257,13 @@ mod tests {
     compiler_test!(
         grouping_1,
         "1*(2+3)",
-        vec![Op::Constant(0), Op::Constant(1), Op::Constant(2), Op::Add, Op::Multiply],
+        vec![
+            Op::Constant(0),
+            Op::Constant(1),
+            Op::Constant(2),
+            Op::Add,
+            Op::Multiply
+        ],
         vec![Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]
     );
 }

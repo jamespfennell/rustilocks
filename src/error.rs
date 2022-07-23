@@ -1,7 +1,10 @@
-use crate::chunk::{Op, OpCode};
+use crate::{
+    chunk::{Op, OpCode},
+    scanner::Token,
+};
 
 #[derive(Debug)]
-pub enum Error {
+pub enum InvalidBytecodeError {
     ValueStackTooSmall {
         op: Op,
         stack_size_actual: usize,
@@ -18,4 +21,25 @@ pub enum Error {
     MissingOpArgument {
         op_code: OpCode,
     },
+}
+
+#[derive(Debug)]
+pub enum ScannerError<'a> {
+    InvalidCharacter(&'a str),
+    UnterminatedString(&'a str),
+}
+
+#[derive(Debug)]
+pub enum CompilationError<'a> {
+    ScannerError(ScannerError<'a>),
+    TooManyConstants(Token<'a>),
+    UnexpectedToken(Token<'a>, &'static str),
+    MissingToken(&'static str),
+    InvalidNumber(Token<'a>),
+}
+
+impl<'a> From<Box<ScannerError<'a>>> for Box<CompilationError<'a>> {
+    fn from(e: Box<ScannerError<'a>>) -> Self {
+        Box::new(CompilationError::ScannerError(*e))
+    }
 }
