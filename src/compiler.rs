@@ -12,7 +12,7 @@ pub fn compile(src: &str) -> Result<chunk::Chunk, Box<CompilationError>> {
             constants: vec![],
         },
     };
-    compiler.parse_precendence(Precedence::Assignment)?;
+    compiler.expression()?;
     compiler.emit_op(Op::Return);
     Ok(compiler.chunk)
 }
@@ -23,6 +23,10 @@ struct Compiler<'a> {
 }
 
 impl<'a> Compiler<'a> {
+    fn expression(&mut self) -> Result<(), Box<CompilationError<'a>>> {
+        self.parse_precendence(Precedence::Assignment)
+    }
+
     fn parse_precendence(
         &mut self,
         precedence: Precedence,
@@ -33,7 +37,12 @@ impl<'a> Compiler<'a> {
         };
         let (prefix_rule, _, _) = get_rules(token.token_type);
         let prefix_rule = match prefix_rule {
-            None => return Err(Box::new(CompilationError::UnexpectedToken(token, "expected a prefix token"))),
+            None => {
+                return Err(Box::new(CompilationError::UnexpectedToken(
+                    token,
+                    "expected a prefix token",
+                )))
+            }
             Some(prefix_rule) => prefix_rule,
         };
         prefix_rule(self, token)?;
@@ -99,54 +108,62 @@ fn get_rules<'a>(
     match token_type {
         TokenType::LeftParen => (Some(prefix_left_paren), None, Precedence::None),
         TokenType::RightParen => (None, None, Precedence::None),
-        TokenType::Minus => (Some(prefix_minus), Some(infix_minus), Precedence::Term),
-        TokenType::Plus => (None, Some(infix_plus), Precedence::Term),
-        TokenType::Slash => (None, Some(infix_slash), Precedence::Factor),
-        TokenType::Star => (None, Some(infix_star), Precedence::Factor),
-        TokenType::Number => (Some(infix_number), None, Precedence::None),
-        _ => panic!("unimplemented: {:?}", token_type),
+        TokenType::Minus => (Some(prefix_minus), Some(infix_binary), Precedence::Term),
+        TokenType::Plus => (None, Some(infix_binary), Precedence::Term),
+        TokenType::Slash => (None, Some(infix_binary), Precedence::Factor),
+        TokenType::Star => (None, Some(infix_binary), Precedence::Factor),
+        TokenType::Bang => (Some(prefix_bang), None, Precedence::Unary),
+        TokenType::BangEqual => (None, Some(infix_binary), Precedence::Equality),
+        TokenType::EqualEqual => (None, Some(infix_binary), Precedence::Equality),
+        TokenType::Greater => (None, Some(infix_binary), Precedence::Comparison),
+        TokenType::GreaterEqual => (None, Some(infix_binary), Precedence::Comparison),
+        TokenType::Less => (None, Some(infix_binary), Precedence::Comparison),
+        TokenType::LessEqual => (None, Some(infix_binary), Precedence::Comparison),
+        TokenType::Number => (Some(prefix_number), None, Precedence::None),
+        TokenType::False => (Some(prefix_false), None, Precedence::None),
+        TokenType::Nil => (Some(prefix_nil), None, Precedence::None),
+        TokenType::True => (Some(prefix_true), None, Precedence::None),
+        _ => panic!("unimplemented compilation rule for token: {:?}", token_type),
     }
 }
 
-fn infix_minus<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
-    c.parse_precendence(Precedence::Factor)?;
-    c.emit_op(Op::Subtract);
-    Ok(())
-}
-
-fn infix_number<'a>(
-    s: &mut Compiler<'a>,
-    token: Token<'a>,
-) -> Result<(), Box<CompilationError<'a>>> {
-    let d = match token.source.parse::<f64>() {
-        Ok(d) => d,
-        Err(_) => return Err(Box::new(CompilationError::InvalidNumber(token))),
+// TODO: if this turns out to be the only infix function then we should refactor the code to
+// not go through the rules at all. This way we could avoid double matching on the token type.
+fn infix_binary<'a>(c: &mut Compiler<'a>, token: Token) -> Result<(), Box<CompilationError<'a>>> {
+    let (next_precedence, op_1, op_2) = match token.token_type {
+        TokenType::Plus => (Precedence::Factor, Op::Add, None),
+        TokenType::Minus => (Precedence::Factor, Op::Subtract, None),
+        TokenType::Star => (Precedence::Unary, Op::Multiply, None),
+        TokenType::Slash => (Precedence::Unary, Op::Divide, None),
+        TokenType::BangEqual => (Precedence::Comparison, Op::Equal, Some(Op::Not)),
+        TokenType::EqualEqual => (Precedence::Comparison, Op::Equal, None),
+        TokenType::Greater => (Precedence::Term, Op::Greater, None),
+        TokenType::GreaterEqual => (Precedence::Term, Op::Less, Some(Op::Not)),
+        TokenType::Less => (Precedence::Term, Op::Less, None),
+        TokenType::LessEqual => (Precedence::Term, Op::Greater, Some(Op::Not)),
+        _ => unreachable!(),
     };
-    let i = s.emit_constant(token,  Value::Number(d))?;
-    s.emit_op(Op::Constant(i));
+    c.parse_precendence(next_precedence)?;
+    c.emit_op(op_1);
+    if let Some(op_2) = op_2 {
+        c.emit_op(op_2);
+    }
     Ok(())
 }
 
-fn infix_plus<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
-    c.parse_precendence(Precedence::Factor)?;
-    c.emit_op(Op::Add);
+fn prefix_bang<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
+    c.expression()?;
+    c.emit_op(Op::Not);
     Ok(())
 }
 
-fn infix_slash<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
-    c.parse_precendence(Precedence::Unary)?;
-    c.emit_op(Op::Divide);
-    Ok(())
-}
-
-fn infix_star<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
-    c.parse_precendence(Precedence::Unary)?;
-    c.emit_op(Op::Multiply);
+fn prefix_false<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
+    c.emit_op(Op::False);
     Ok(())
 }
 
 fn prefix_left_paren<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
-    c.parse_precendence(Precedence::Assignment)?;
+    c.expression()?;
     match c.scanner.next()? {
         None => Err(Box::new(CompilationError::MissingToken(
             "expected a closing parenthesis",
@@ -162,8 +179,31 @@ fn prefix_left_paren<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<Compi
 }
 
 fn prefix_minus<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
-    c.parse_precendence(Precedence::Unary)?;
+    c.expression()?;
     c.emit_op(Op::Negate);
+    Ok(())
+}
+
+fn prefix_nil<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
+    c.emit_op(Op::Nil);
+    Ok(())
+}
+
+fn prefix_number<'a>(
+    s: &mut Compiler<'a>,
+    token: Token<'a>,
+) -> Result<(), Box<CompilationError<'a>>> {
+    let d = match token.source.parse::<f64>() {
+        Ok(d) => d,
+        Err(_) => return Err(Box::new(CompilationError::InvalidNumber(token))),
+    };
+    let i = s.emit_constant(token, Value::Number(d))?;
+    s.emit_op(Op::Constant(i));
+    Ok(())
+}
+
+fn prefix_true<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
+    c.emit_op(Op::True);
     Ok(())
 }
 
@@ -265,5 +305,46 @@ mod tests {
             Op::Multiply
         ],
         vec![Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]
+    );
+    compiler_test!(prefix_true, "true", vec![Op::True], vec![]);
+    compiler_test!(prefix_false, "false", vec![Op::False], vec![]);
+    compiler_test!(prefix_nil, "nil", vec![Op::Nil], vec![]);
+    compiler_test!(prefix_not, "!", vec![Op::Not], vec![]);
+    compiler_test!(boolean, "!true", vec![Op::True, Op::Not], vec![]);
+    compiler_test!(
+        prefix_bang_equal,
+        "1!=2",
+        vec![Op::Constant(0), Op::Constant(1), Op::Equal, Op::Not],
+        vec![Value::Number(1.0), Value::Number(2.0)]
+    );
+    compiler_test!(
+        prefix_equal_equal,
+        "1==2",
+        vec![Op::Constant(0), Op::Constant(1), Op::Equal],
+        vec![Value::Number(1.0), Value::Number(2.0)]
+    );
+    compiler_test!(
+        prefix_less_equal,
+        "1<=2",
+        vec![Op::Constant(0), Op::Constant(1), Op::Greater, Op::Not],
+        vec![Value::Number(1.0), Value::Number(2.0)]
+    );
+    compiler_test!(
+        prefix_less,
+        "1<2",
+        vec![Op::Constant(0), Op::Constant(1), Op::Less],
+        vec![Value::Number(1.0), Value::Number(2.0)]
+    );
+    compiler_test!(
+        prefix_greater_equal,
+        "1>=2",
+        vec![Op::Constant(0), Op::Constant(1), Op::Less, Op::Not],
+        vec![Value::Number(1.0), Value::Number(2.0)]
+    );
+    compiler_test!(
+        prefix_greater,
+        "1>2",
+        vec![Op::Constant(0), Op::Constant(1), Op::Greater],
+        vec![Value::Number(1.0), Value::Number(2.0)]
     );
 }

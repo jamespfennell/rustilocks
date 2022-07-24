@@ -1,7 +1,24 @@
-use crate::{
-    chunk::{Op, OpCode},
-    scanner::Token,
-};
+use crate::{chunk::Op, scanner::Token, value::Value};
+
+#[derive(Debug)]
+pub enum RuntimeError {
+    InvalidBytecode(InvalidBytecodeError),
+    InvalidTypeForUnaryOp {
+        operand: Value,
+        op: Op,
+    },
+    InvalidTypeForBinaryOp {
+        left_operand: Value,
+        right_operand: Value,
+        op: Op,
+    },
+}
+
+impl From<Box<InvalidBytecodeError>> for Box<RuntimeError> {
+    fn from(e: Box<InvalidBytecodeError>) -> Self {
+        Box::new(RuntimeError::InvalidBytecode(*e))
+    }
+}
 
 #[derive(Debug)]
 pub enum InvalidBytecodeError {
@@ -15,11 +32,11 @@ pub enum InvalidBytecodeError {
         num_constants: usize,
     },
     UnknownOpCode {
-        code: u8,
+        op_code: u8,
     },
     EmptyBytecode,
     MissingOpArgument {
-        op_code: OpCode,
+        op: Op,
     },
 }
 

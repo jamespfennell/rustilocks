@@ -1,36 +1,9 @@
 use crate::chunk;
 use crate::chunk::Op;
-use crate::error::InvalidBytecodeError;
+use crate::error::{InvalidBytecodeError, RuntimeError};
 use crate::value::Value;
 
-macro_rules! pop_one {
-    ($value_stack: ident, $op: expr) => {
-        pop_one!($value_stack, $op, 1, 0)
-    };
-    ($value_stack: ident, $op: expr, $needed: expr, $actual: expr) => {
-        match $value_stack.pop() {
-            None => {
-                return Err(InvalidBytecodeError::ValueStackTooSmall {
-                    op: $op,
-                    stack_size_needed: $needed,
-                    stack_size_actual: $actual,
-                })
-            }
-            Some(value) => value,
-        }
-    };
-}
-
-macro_rules! pop_two {
-    ($value_stack: ident, $op: expr) => {{
-        // It's a stack so the values are in reverse order
-        let b = pop_one!($value_stack, $op, 2, 1);
-        let a = pop_one!($value_stack, $op, 2, 0);
-        (a, b)
-    }};
-}
-
-pub fn run(chunk: &chunk::Chunk) -> Result<(), InvalidBytecodeError> {
+pub fn run(chunk: &chunk::Chunk) -> Result<(), Box<RuntimeError>> {
     let mut ip: &[u8] = &chunk.bytecode;
     let mut value_stack = vec![];
     while !ip.is_empty() {
@@ -40,40 +13,63 @@ pub fn run(chunk: &chunk::Chunk) -> Result<(), InvalidBytecodeError> {
             Op::Constant(i) => {
                 let value = match chunk.constants.get(i as usize) {
                     None => {
-                        return Err(InvalidBytecodeError::InvalidConstantIndex {
-                            op: op,
-                            num_constants: chunk.constants.len(),
-                        })
+                        return Err(Box::new(RuntimeError::InvalidBytecode(
+                            InvalidBytecodeError::InvalidConstantIndex {
+                                op: op,
+                                num_constants: chunk.constants.len(),
+                            },
+                        )))
                     }
                     Some(value) => value,
                 };
                 value_stack.push(value.clone());
             }
-            Op::Negate => match pop_one!(value_stack, Op::Negate) {
-                Value::Number(d) => {
-                    value_stack.push(Value::Number(-d));
-                }
-            },
-            Op::Add => match pop_two!(value_stack, Op::Add) {
-                (Value::Number(a), Value::Number(b)) => {
-                    value_stack.push(Value::Number(a + b));
-                }
-            },
-            Op::Subtract => match pop_two!(value_stack, Op::Subtract) {
-                (Value::Number(a), Value::Number(b)) => {
-                    value_stack.push(Value::Number(a - b));
-                }
-            },
-            Op::Multiply => match pop_two!(value_stack, Op::Multiply) {
-                (Value::Number(a), Value::Number(b)) => {
-                    value_stack.push(Value::Number(a * b));
-                }
-            },
-            Op::Divide => match pop_two!(value_stack, Op::Divide) {
-                (Value::Number(a), Value::Number(b)) => {
-                    value_stack.push(Value::Number(a / b));
-                }
-            },
+            // Unary operators
+            Op::Negate | Op::Not => {
+                let operand = pop_one(&mut value_stack, op)?;
+                let result = match (op, operand) {
+                    (Op::Not, _) => Value::Bool(operand.is_falsey()),
+                    (Op::Negate, Value::Number(d)) => Value::Number(-d),
+                    _ => {
+                        return Err(Box::new(RuntimeError::InvalidTypeForUnaryOp {
+                            operand,
+                            op,
+                        }))
+                    }
+                };
+                value_stack.push(result);
+            }
+            // Binary operators
+            Op::Add
+            | Op::Subtract
+            | Op::Multiply
+            | Op::Divide
+            | Op::Equal
+            | Op::Greater
+            | Op::Less => {
+                let (left_operand, right_operand) = pop_two(&mut value_stack, op)?;
+                let result = match (op, left_operand, right_operand) {
+                    (Op::Equal, _, _) => Value::Bool(left_operand.equal(right_operand)),
+                    (Op::Add, Value::Number(a), Value::Number(b)) => Value::Number(a + b),
+                    (Op::Subtract, Value::Number(a), Value::Number(b)) => Value::Number(a - b),
+                    (Op::Multiply, Value::Number(a), Value::Number(b)) => Value::Number(a * b),
+                    (Op::Divide, Value::Number(a), Value::Number(b)) => Value::Number(a / b),
+                    (Op::Greater, Value::Number(a), Value::Number(b)) => Value::Bool(a > b),
+                    (Op::Less, Value::Number(a), Value::Number(b)) => Value::Bool(a < b),
+                    _ => {
+                        return Err(Box::new(RuntimeError::InvalidTypeForBinaryOp {
+                            left_operand,
+                            right_operand,
+                            op,
+                        }))
+                    }
+                };
+                value_stack.push(result);
+            }
+            // Literals
+            Op::True => value_stack.push(Value::Bool(true)),
+            Op::False => value_stack.push(Value::Bool(false)),
+            Op::Nil => value_stack.push(Value::Nil),
         }
         println!("{:?}", op);
         for value in &value_stack {
@@ -84,10 +80,36 @@ pub fn run(chunk: &chunk::Chunk) -> Result<(), InvalidBytecodeError> {
     Ok(())
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+fn pop_one(value_stack: &mut Vec<Value>, op: Op) -> Result<Value, Box<InvalidBytecodeError>> {
+    match value_stack.pop() {
+        None => Err(Box::new(InvalidBytecodeError::ValueStackTooSmall {
+            op,
+            stack_size_needed: 1,
+            stack_size_actual: 0,
+        })),
+        Some(value) => Ok(value),
+    }
+}
 
-    #[test]
-    fn test_subtractino() {}
+fn pop_two(
+    value_stack: &mut Vec<Value>,
+    op: Op,
+) -> Result<(Value, Value), Box<InvalidBytecodeError>> {
+    let rhs = match value_stack.pop() {
+        None => Err(Box::new(InvalidBytecodeError::ValueStackTooSmall {
+            op,
+            stack_size_needed: 2,
+            stack_size_actual: 0,
+        })),
+        Some(value) => Ok(value),
+    }?;
+    let lhs = match value_stack.pop() {
+        None => Err(Box::new(InvalidBytecodeError::ValueStackTooSmall {
+            op,
+            stack_size_needed: 2,
+            stack_size_actual: 1,
+        })),
+        Some(value) => Ok(value),
+    }?;
+    Ok((lhs, rhs))
 }

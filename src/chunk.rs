@@ -23,7 +23,7 @@ impl Chunk {
         chunk
     }
 
-    pub fn disassemble(&self) -> Result<(), InvalidBytecodeError> {
+    pub fn disassemble(&self) -> Result<(), Box<InvalidBytecodeError>> {
         println!("%%%% chunk %%%%");
         let mut ip: &[u8] = &self.bytecode;
         while !ip.is_empty() {
@@ -85,48 +85,73 @@ pub enum Op {
     Subtract,
     Multiply,
     Divide,
+    True,
+    False,
+    Nil,
+    Not,
+    Equal,
+    Greater,
+    Less,
 }
 
 impl Op {
     /// Read reads the first op from the provided bytecode and returns the op
     /// and a pointer to code after the op.
-    pub fn read(b: &[u8]) -> Result<(Op, &[u8]), InvalidBytecodeError> {
-        let (i, mut tail) = match b.split_first() {
-            None => return Err(InvalidBytecodeError::EmptyBytecode),
+    pub fn read(b: &[u8]) -> Result<(Op, &[u8]), Box<InvalidBytecodeError>> {
+        let (op_code, mut tail) = match b.split_first() {
+            None => return Err(Box::new(InvalidBytecodeError::EmptyBytecode)),
             Some((i, tail)) => (*i, tail),
         };
-        let op_code = match OpCode::try_from(i) {
-            Err(()) => return Err(InvalidBytecodeError::UnknownOpCode { code: i }),
-            Ok(op_code) => op_code,
-        };
         let op = match op_code {
-            OpCode::Constant => {
+            0 => Op::Return,
+            1 => {
                 let (i, new_tail) = match tail.split_first() {
                     None => {
-                        return Err(InvalidBytecodeError::MissingOpArgument { op_code: op_code })
+                        return Err(Box::new(InvalidBytecodeError::MissingOpArgument {
+                            op: Op::Constant(0),
+                        }))
                     }
                     Some((i, tail)) => (*i, tail),
                 };
                 tail = new_tail;
                 Op::Constant(i)
             }
-            OpCode::Return => Op::Return,
-            OpCode::Negate => Op::Negate,
-            OpCode::Add => Op::Add,
-            OpCode::Subtract => Op::Subtract,
-            OpCode::Multiply => Op::Multiply,
-            OpCode::Divide => Op::Divide,
+            2 => Op::Negate,
+            3 => Op::Add,
+            4 => Op::Subtract,
+            5 => Op::Multiply,
+            6 => Op::Divide,
+            7 => Op::True,
+            8 => Op::False,
+            9 => Op::Nil,
+            10 => Op::Not,
+            11 => Op::Equal,
+            12 => Op::Greater,
+            13 => Op::Less,
+            _ => return Err(Box::new(InvalidBytecodeError::UnknownOpCode { op_code })),
         };
         Ok((op, tail))
     }
 
     pub fn write(&self, buffer: &mut Vec<u8>) {
-        buffer.push(self.op_code().into());
+        buffer.push(self.op_code());
         match self {
             Op::Constant(i) => {
                 buffer.push(*i);
             }
-            Op::Return | Op::Negate | Op::Add | Op::Subtract | Op::Multiply | Op::Divide => {}
+            Op::Return
+            | Op::Negate
+            | Op::Add
+            | Op::Subtract
+            | Op::Multiply
+            | Op::Divide
+            | Op::True
+            | Op::False
+            | Op::Nil
+            | Op::Not
+            | Op::Equal
+            | Op::Greater
+            | Op::Less => {}
         }
     }
 
@@ -147,64 +172,33 @@ impl Op {
             Op::Subtract => format!("SUBTRACT"),
             Op::Multiply => format!("MULTIPLY"),
             Op::Divide => format!("DIVIDE"),
+            Op::True => format!("TRUE"),
+            Op::False => format!("FALSE"),
+            Op::Nil => format!("NIL"),
+            Op::Not => format!("NOT"),
+            Op::Equal => format!("EQUAL"),
+            Op::Greater => format!("GREATER"),
+            Op::Less => format!("LESS"),
         };
         println!("{:04} {}", offset, text);
     }
 
-    fn op_code(&self) -> OpCode {
+    fn op_code(&self) -> u8 {
         match self {
-            Op::Constant(_) => OpCode::Constant,
-            Op::Return => OpCode::Return,
-            Op::Negate => OpCode::Negate,
-            Op::Add => OpCode::Add,
-            Op::Subtract => OpCode::Subtract,
-            Op::Multiply => OpCode::Multiply,
-            Op::Divide => OpCode::Divide,
-        }
-    }
-}
-
-/// OpCode is the code for a single instruction in Lox.
-/// TODO: make C style?
-#[derive(PartialEq, Eq, Debug, Copy, Clone)]
-pub enum OpCode {
-    Constant,
-    Return,
-    Negate,
-    Add,
-    Subtract,
-    Multiply,
-    Divide,
-}
-
-impl TryFrom<u8> for OpCode {
-    type Error = ();
-
-    fn try_from(i: u8) -> Result<Self, Self::Error> {
-        let op_code = match i {
-            0 => OpCode::Return,
-            1 => OpCode::Constant,
-            2 => OpCode::Negate,
-            3 => OpCode::Add,
-            4 => OpCode::Subtract,
-            5 => OpCode::Multiply,
-            6 => OpCode::Divide,
-            _ => return Err(()),
-        };
-        Ok(op_code)
-    }
-}
-
-impl From<OpCode> for u8 {
-    fn from(op_code: OpCode) -> Self {
-        match op_code {
-            OpCode::Return => 0,
-            OpCode::Constant => 1,
-            OpCode::Negate => 2,
-            OpCode::Add => 3,
-            OpCode::Subtract => 4,
-            OpCode::Multiply => 5,
-            OpCode::Divide => 6,
+            Op::Return => 0,
+            Op::Constant(_) => 1,
+            Op::Negate => 2,
+            Op::Add => 3,
+            Op::Subtract => 4,
+            Op::Multiply => 5,
+            Op::Divide => 6,
+            Op::True => 7,
+            Op::False => 8,
+            Op::Nil => 9,
+            Op::Not => 10,
+            Op::Equal => 11,
+            Op::Greater => 12,
+            Op::Less => 13,
         }
     }
 }
@@ -223,6 +217,13 @@ mod tests {
             Op::Subtract,
             Op::Multiply,
             Op::Divide,
+            Op::True,
+            Op::False,
+            Op::Nil,
+            Op::Not,
+            Op::Equal,
+            Op::Greater,
+            Op::Less,
         ];
         for op in all_ops {
             let mut buffer = vec![];
@@ -230,23 +231,6 @@ mod tests {
             let (out_op, tail) = Op::read(&buffer).unwrap();
             assert_eq!(op, out_op);
             assert!(tail.is_empty());
-        }
-    }
-
-    #[test]
-    fn test_op_code_round_trip() {
-        let all_op_codes = vec![
-            OpCode::Constant,
-            OpCode::Return,
-            OpCode::Negate,
-            OpCode::Add,
-            OpCode::Subtract,
-            OpCode::Multiply,
-            OpCode::Divide,
-        ];
-        for op_code in all_op_codes {
-            let i: u8 = op_code.into();
-            assert_eq!(op_code, i.try_into().unwrap())
         }
     }
 }
