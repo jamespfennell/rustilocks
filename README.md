@@ -12,10 +12,11 @@ The binary operates on 3 file formats:
 - `.loxa`: Lox assembly. This is similar to the disassembly output in Crafting Interpreters
     except it can also be parsed back in and compiled to bytecode.
 
-- `.rlks`: Lox binary code. This is a serialization of a compiled Lox chunk.
+- `.rlks`: Lox binary code. ~~This is a serialization of a compiled Lox chunk.
     I currently use the bincode library for this, but may handroll my own (de)serialization code at some point.
     This is pretty easy as the bytecode proper is already binary - the non-trivial part
-        is handling Lox values.
+        is handling Lox values.~~ Not functioning for the moment while I figure out how to serialize/deserialize
+        interned strings.
 
 ## Goals
 
@@ -31,8 +32,8 @@ The binary operates on 3 file formats:
 
 ## Status
 
-- Chapter 14-17: done
+- Chapter 14-19: done
 
-- Chapter 18: in progress.
+- Chapter 21: in progress.
 
-- Chapter 19-29: to be started
+- Chapter 22-29: to be started

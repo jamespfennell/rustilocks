@@ -7,10 +7,7 @@ use crate::value::Value;
 pub fn compile(src: &str) -> Result<chunk::Chunk, Box<CompilationError>> {
     let mut compiler = Compiler {
         scanner: scanner::Scanner::new(src),
-        chunk: chunk::Chunk {
-            bytecode: vec![],
-            constants: vec![],
-        },
+        chunk: chunk::Chunk::new(),
     };
     compiler.expression()?;
     compiler.emit_op(Op::Return);
@@ -71,6 +68,7 @@ impl<'a> Compiler<'a> {
         op.write(&mut self.chunk.bytecode);
     }
 
+    // TODO: should this also emit the op?
     fn emit_constant(
         &mut self,
         token: Token<'a>,
@@ -123,6 +121,7 @@ fn get_rules<'a>(
         TokenType::False => (Some(prefix_false), None, Precedence::None),
         TokenType::Nil => (Some(prefix_nil), None, Precedence::None),
         TokenType::True => (Some(prefix_true), None, Precedence::None),
+        TokenType::String => (Some(prefix_string), None, Precedence::None),
         _ => panic!("unimplemented compilation rule for token: {:?}", token_type),
     }
 }
@@ -202,6 +201,18 @@ fn prefix_number<'a>(
     Ok(())
 }
 
+fn prefix_string<'a>(
+    c: &mut Compiler<'a>,
+    token: Token<'a>,
+) -> Result<(), Box<CompilationError<'a>>> {
+    // We need to trim the opening and closing quotation marks.
+    let s = &token.source[1..token.source.len() - 1];
+    let value = Value::String(c.chunk.string_interner.intern_ref(s));
+    let i = c.emit_constant(token, value)?;
+    c.emit_op(Op::Constant(i));
+    Ok(())
+}
+
 fn prefix_true<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
     c.emit_op(Op::True);
     Ok(())
@@ -222,13 +233,7 @@ mod tests {
 
                 assert_eq!(chunk.constants, $want_constants);
 
-                let mut got_ops = vec![];
-                let mut bytecode: &[u8] = &chunk.bytecode;
-                while !bytecode.is_empty() {
-                    let (op, new_bytecode) = Op::read(&bytecode).unwrap();
-                    got_ops.push(op);
-                    bytecode = new_bytecode;
-                }
+                let got_ops = chunk.convert_bytecode_to_ops().unwrap();
                 assert_eq!(got_ops, want_ops);
             }
         };
@@ -341,10 +346,25 @@ mod tests {
         vec![Op::Constant(0), Op::Constant(1), Op::Less, Op::Not],
         vec![Value::Number(1.0), Value::Number(2.0)]
     );
+
     compiler_test!(
         prefix_greater,
         "1>2",
         vec![Op::Constant(0), Op::Constant(1), Op::Greater],
         vec![Value::Number(1.0), Value::Number(2.0)]
     );
+
+    #[test]
+    fn prefix_string() {
+        let want_ops = vec![Op::Constant(0), Op::Constant(1), Op::Add, Op::Return];
+        let input = "\"hello\" + \"world\"";
+        let mut chunk = compile(input).unwrap();
+
+        let want_const_1 = Value::String(chunk.string_interner.intern_ref("hello"));
+        let want_const_2 = Value::String(chunk.string_interner.intern_ref("world"));
+        assert_eq!(chunk.constants, vec![want_const_1, want_const_2]);
+
+        let got_ops = chunk.convert_bytecode_to_ops().unwrap();
+        assert_eq!(got_ops, want_ops);
+    }
 }

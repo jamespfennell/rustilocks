@@ -1,26 +1,50 @@
 use std::collections::HashMap;
 
 use crate::error::InvalidBytecodeError;
+use crate::value::loxstring;
 use crate::value::Value;
 
-#[derive(bincode::Decode, bincode::Encode, Debug)]
+#[derive(Debug)]
 pub struct Chunk {
     pub bytecode: Vec<u8>,
     pub constants: Vec<Value>,
+    pub string_interner: loxstring::Interner,
 }
 
 impl Chunk {
-    pub fn serialize(&self) -> Result<Vec<u8>, ()> {
-        match bincode::encode_to_vec(self, bincode::config::standard()) {
-            Ok(v) => Ok(v),
-            Err(_) => Err(()),
+    pub fn new() -> Chunk {
+        Chunk {
+            bytecode: vec![],
+            constants: vec![],
+            string_interner: Default::default(),
         }
+    }
+    pub fn serialize(&self) -> Result<Vec<u8>, ()> {
+        panic!("not implemented");
+        // TODO: implement
+        //match bincode::encode_to_vec(self, bincode::config::standard()) {
+        //    Ok(v) => Ok(v),
+        //    Err(_) => Err(()),
+        // }
     }
 
     pub fn deserialize(src: &[u8]) -> Chunk {
-        let (chunk, _): (Chunk, _) =
-            bincode::decode_from_slice(src, bincode::config::standard()).unwrap();
-        chunk
+        panic!("not implemented");
+        // TODO: implement
+        //let (chunk, _): (Chunk, _) =
+        //    bincode::decode_from_slice(src, bincode::config::standard()).unwrap();
+        //chunk
+    }
+
+    pub fn convert_bytecode_to_ops(&self) -> Result<Vec<Op>, Box<InvalidBytecodeError>> {
+        let mut ops = vec![];
+        let mut bytecode: &[u8] = &self.bytecode;
+        while !bytecode.is_empty() {
+            let (op, new_bytecode) = Op::read(&bytecode)?;
+            ops.push(op);
+            bytecode = new_bytecode;
+        }
+        Ok(ops)
     }
 
     pub fn disassemble(&self) -> Result<(), Box<InvalidBytecodeError>> {
@@ -71,6 +95,7 @@ impl Chunk {
         Chunk {
             bytecode,
             constants,
+            string_interner: Default::default(),
         }
     }
 }
