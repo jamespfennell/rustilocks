@@ -1,4 +1,8 @@
-use crate::{chunk::Op, scanner::Token, value::Value};
+use crate::{
+    chunk::Op,
+    scanner::{Token, TokenType},
+    value::Value,
+};
 
 #[derive(Debug)]
 pub enum RuntimeError {
@@ -51,6 +55,7 @@ pub enum CompilationError<'a> {
     ScannerError(ScannerError<'a>),
     TooManyConstants(Token<'a>),
     UnexpectedToken(Token<'a>, &'static str),
+    UnexpectedTokenType(Option<Token<'a>>, TokenType),
     MissingToken(&'static str),
     InvalidNumber(Token<'a>),
 }

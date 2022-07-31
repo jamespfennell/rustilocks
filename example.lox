@@ -1,2 +1,3 @@
-// !(5 - 4 > 3 * 2 == ! nil)
-"hello" + " " + "world" == "hello world"
+print (5 - 4 > 3 * 2);
+print "hello" + " " + "world" == "hello world";
+print "Hello from the Lox VM!";

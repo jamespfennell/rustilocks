@@ -99,10 +99,14 @@ pub fn run(chunk: &chunk::Chunk) -> Result<(), Box<RuntimeError>> {
             Op::True => value_stack.push(Value::Bool(true)),
             Op::False => value_stack.push(Value::Bool(false)),
             Op::Nil => value_stack.push(Value::Nil),
-        }
-        println!("{:?}", op);
-        for value in &value_stack {
-            println!("[ {} ]", value);
+            Op::Print => {
+                let value = pop_one(&mut value_stack, op)?;
+                // TODO: support a custom print function
+                println!("{}", value);
+            }
+            Op::Pop => {
+                pop_one(&mut value_stack, op)?;
+            }
         }
         ip = new_ip;
     }

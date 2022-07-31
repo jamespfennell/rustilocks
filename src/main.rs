@@ -81,7 +81,6 @@ fn main() {
                 InputFile::Assembly(s) => chunk::Chunk::assemble(&s),
                 InputFile::Binary(src) => chunk::Chunk::deserialize(&src).unwrap(),
             };
-            println!("{:?}", chunk);
             vm::run(&chunk).unwrap();
         }
         Command::Tokenize { input } => {
