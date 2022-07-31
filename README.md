@@ -12,11 +12,8 @@ The binary operates on 3 file formats:
 - `.loxa`: Lox assembly. This is similar to the disassembly output in Crafting Interpreters
     except it can also be parsed back in and compiled to bytecode.
 
-- `.rlks`: Lox binary code. ~~This is a serialization of a compiled Lox chunk.
-    I currently use the bincode library for this, but may handroll my own (de)serialization code at some point.
-    This is pretty easy as the bytecode proper is already binary - the non-trivial part
-        is handling Lox values.~~ Not functioning for the moment while I figure out how to serialize/deserialize
-        interned strings.
+- `.rlks`: Lox binary code. This is a serialization of a compiled Lox program,
+    and can be run directly by the Rustilocks interpreter.
 
 ## Goals
 

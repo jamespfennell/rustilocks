@@ -2,6 +2,7 @@ mod chunk;
 mod compiler;
 mod error;
 mod scanner;
+mod serde;
 mod value;
 mod vm;
 
@@ -64,13 +65,13 @@ fn main() {
                 }
                 Some(output) => output,
             };
-            std::fs::write(&output, chunk.serialize().unwrap()).unwrap();
+            std::fs::write(&output, chunk.serialize()).unwrap();
         }
         Command::Disassemble { input } => {
             let chunk = match InputFile::read(&input) {
                 InputFile::Lox(_) => panic!("can't disassemble .lox files"),
                 InputFile::Assembly(_) => panic!("can't disassemble .lox files"),
-                InputFile::Binary(src) => chunk::Chunk::deserialize(&src),
+                InputFile::Binary(src) => chunk::Chunk::deserialize(&src).unwrap(),
             };
             chunk.disassemble().unwrap();
         }
@@ -78,7 +79,7 @@ fn main() {
             let chunk = match InputFile::read(&input) {
                 InputFile::Lox(src) => compiler::compile(&src).unwrap(),
                 InputFile::Assembly(s) => chunk::Chunk::assemble(&s),
-                InputFile::Binary(src) => chunk::Chunk::deserialize(&src),
+                InputFile::Binary(src) => chunk::Chunk::deserialize(&src).unwrap(),
             };
             println!("{:?}", chunk);
             vm::run(&chunk).unwrap();

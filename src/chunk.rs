@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use crate::error::InvalidBytecodeError;
+use crate::serde;
 use crate::value::loxstring;
 use crate::value::Value;
 
@@ -19,21 +20,12 @@ impl Chunk {
             string_interner: Default::default(),
         }
     }
-    pub fn serialize(&self) -> Result<Vec<u8>, ()> {
-        panic!("not implemented");
-        // TODO: implement
-        //match bincode::encode_to_vec(self, bincode::config::standard()) {
-        //    Ok(v) => Ok(v),
-        //    Err(_) => Err(()),
-        // }
+    pub fn serialize(&self) -> Vec<u8> {
+        serde::serialize_chunk(&self)
     }
 
-    pub fn deserialize(src: &[u8]) -> Chunk {
-        panic!("not implemented");
-        // TODO: implement
-        //let (chunk, _): (Chunk, _) =
-        //    bincode::decode_from_slice(src, bincode::config::standard()).unwrap();
-        //chunk
+    pub fn deserialize(src: &[u8]) -> Result<Chunk, String> {
+        serde::deserialize_chunk(src)
     }
 
     pub fn convert_bytecode_to_ops(&self) -> Result<Vec<Op>, Box<InvalidBytecodeError>> {
