@@ -1,6 +1,6 @@
 use crate::chunk;
 use crate::chunk::Op;
-use crate::error::{CompilationError, ScannerError};
+use crate::error::*;
 use crate::scanner::{self, Token, TokenType};
 use crate::value::Value;
 
@@ -227,7 +227,7 @@ fn infix_binary<'a>(c: &mut Compiler<'a>, token: Token) -> Result<(), Box<Compil
 }
 
 fn prefix_bang<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
-    c.expression()?;
+    c.parse_precendence(Precedence::Unary)?;
     c.emit_op(Op::Not);
     Ok(())
 }
@@ -243,7 +243,7 @@ fn prefix_left_paren<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<Compi
 }
 
 fn prefix_minus<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
-    c.expression()?;
+    c.parse_precendence(Precedence::Unary)?;
     c.emit_op(Op::Negate);
     Ok(())
 }
@@ -419,6 +419,18 @@ mod tests {
         "1>2",
         vec![Op::Constant(0), Op::Constant(1), Op::Greater],
         vec![Value::Number(1.0), Value::Number(2.0)]
+    );
+    compiler_test!(
+        less_than_inequality,
+        "-2>1",
+        vec![Op::Constant(0), Op::Negate, Op::Constant(1), Op::Greater],
+        vec![Value::Number(2.0), Value::Number(1.0)]
+    );
+    compiler_test!(
+        bang_comparison,
+        "! true == false",
+        vec![Op::True, Op::Not, Op::False, Op::Equal],
+        vec![]
     );
 
     #[test]
