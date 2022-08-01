@@ -1,6 +1,6 @@
 use crate::chunk;
 use crate::chunk::Op;
-use crate::error::CompilationError;
+use crate::error::*;
 use crate::scanner::{self, Token, TokenType};
 use crate::value::Value;
 
@@ -9,7 +9,9 @@ pub fn compile(src: &str) -> Result<chunk::Chunk, Box<CompilationError>> {
         scanner: scanner::Scanner::new(src),
         chunk: chunk::Chunk::new(),
     };
-    compiler.expression()?;
+    while compiler.scanner.peek()?.is_some() {
+        compiler.declaration()?;
+    }
     compiler.emit_op(Op::Return);
     Ok(compiler.chunk)
 }
@@ -22,6 +24,33 @@ struct Compiler<'a> {
 impl<'a> Compiler<'a> {
     fn expression(&mut self) -> Result<(), Box<CompilationError<'a>>> {
         self.parse_precendence(Precedence::Assignment)
+    }
+
+    fn declaration(&mut self) -> Result<(), Box<CompilationError<'a>>> {
+        self.statement()
+    }
+
+    fn statement(&mut self) -> Result<(), Box<CompilationError<'a>>> {
+        let next = match self.scanner.peek()? {
+            None => return Ok(()),
+            Some(next) => next,
+        };
+        match next.token_type {
+            TokenType::Print => {
+                self.scanner.consume()?;
+                self.expression()?;
+                consume_specific_token(&mut self.scanner, TokenType::Semicolon)?;
+                self.emit_op(Op::Print);
+                Ok(())
+            }
+            // Expression statement
+            _ => {
+                self.expression()?;
+                consume_specific_token(&mut self.scanner, TokenType::Semicolon)?;
+                self.emit_op(Op::Pop);
+                Ok(())
+            }
+        }
     }
 
     fn parse_precendence(
@@ -83,6 +112,27 @@ impl<'a> Compiler<'a> {
     }
 }
 
+fn consume_specific_token<'a>(
+    scanner: &mut scanner::Scanner<'a>,
+    token_type: TokenType,
+) -> Result<(), Box<CompilationError<'a>>> {
+    match scanner.next()? {
+        None => Err(Box::new(CompilationError::UnexpectedTokenType(
+            None, token_type,
+        ))),
+        Some(token) => {
+            if token.token_type == token_type {
+                Ok(())
+            } else {
+                Err(Box::new(CompilationError::UnexpectedTokenType(
+                    Some(token),
+                    token_type,
+                )))
+            }
+        }
+    }
+}
+
 #[derive(PartialEq, Eq, PartialOrd, Ord, Debug)]
 enum Precedence {
     None = 0,
@@ -104,25 +154,51 @@ fn get_rules<'a>(
     token_type: TokenType,
 ) -> (Option<ParseRule<'a>>, Option<ParseRule<'a>>, Precedence) {
     match token_type {
+        // Single-character tokens
         TokenType::LeftParen => (Some(prefix_left_paren), None, Precedence::None),
         TokenType::RightParen => (None, None, Precedence::None),
+        TokenType::LeftBrace => (None, None, Precedence::None),
+        TokenType::RightBrace => (None, None, Precedence::None),
+        TokenType::Comma => (None, None, Precedence::None),
+        TokenType::Dot => (None, None, Precedence::None),
         TokenType::Minus => (Some(prefix_minus), Some(infix_binary), Precedence::Term),
         TokenType::Plus => (None, Some(infix_binary), Precedence::Term),
+        TokenType::Semicolon => (None, None, Precedence::None),
         TokenType::Slash => (None, Some(infix_binary), Precedence::Factor),
         TokenType::Star => (None, Some(infix_binary), Precedence::Factor),
+
+        // One or two character tokens
         TokenType::Bang => (Some(prefix_bang), None, Precedence::Unary),
         TokenType::BangEqual => (None, Some(infix_binary), Precedence::Equality),
+        TokenType::Equal => (None, None, Precedence::None),
         TokenType::EqualEqual => (None, Some(infix_binary), Precedence::Equality),
         TokenType::Greater => (None, Some(infix_binary), Precedence::Comparison),
         TokenType::GreaterEqual => (None, Some(infix_binary), Precedence::Comparison),
         TokenType::Less => (None, Some(infix_binary), Precedence::Comparison),
         TokenType::LessEqual => (None, Some(infix_binary), Precedence::Comparison),
-        TokenType::Number => (Some(prefix_number), None, Precedence::None),
-        TokenType::False => (Some(prefix_false), None, Precedence::None),
-        TokenType::Nil => (Some(prefix_nil), None, Precedence::None),
-        TokenType::True => (Some(prefix_true), None, Precedence::None),
+
+        // Literals
+        TokenType::Identifier => (None, None, Precedence::None),
         TokenType::String => (Some(prefix_string), None, Precedence::None),
-        _ => panic!("unimplemented compilation rule for token: {:?}", token_type),
+        TokenType::Number => (Some(prefix_number), None, Precedence::None),
+
+        // Keywords
+        TokenType::And => (None, None, Precedence::None),
+        TokenType::Class => (None, None, Precedence::None),
+        TokenType::Else => (None, None, Precedence::None),
+        TokenType::False => (Some(prefix_false), None, Precedence::None),
+        TokenType::For => (None, None, Precedence::None),
+        TokenType::Fun => (None, None, Precedence::None),
+        TokenType::If => (None, None, Precedence::None),
+        TokenType::Nil => (Some(prefix_nil), None, Precedence::None),
+        TokenType::Or => (None, None, Precedence::None),
+        TokenType::Print => (None, None, Precedence::None),
+        TokenType::Return => (None, None, Precedence::None),
+        TokenType::Super => (None, None, Precedence::None),
+        TokenType::This => (None, None, Precedence::None),
+        TokenType::True => (Some(prefix_true), None, Precedence::None),
+        TokenType::Var => (None, None, Precedence::None),
+        TokenType::While => (None, None, Precedence::None),
     }
 }
 
@@ -151,7 +227,7 @@ fn infix_binary<'a>(c: &mut Compiler<'a>, token: Token) -> Result<(), Box<Compil
 }
 
 fn prefix_bang<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
-    c.expression()?;
+    c.parse_precendence(Precedence::Unary)?;
     c.emit_op(Op::Not);
     Ok(())
 }
@@ -163,22 +239,11 @@ fn prefix_false<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<Compilatio
 
 fn prefix_left_paren<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
     c.expression()?;
-    match c.scanner.next()? {
-        None => Err(Box::new(CompilationError::MissingToken(
-            "expected a closing parenthesis",
-        ))),
-        Some(t) => match t.token_type {
-            TokenType::RightParen => Ok(()),
-            _ => Err(Box::new(CompilationError::UnexpectedToken(
-                t,
-                "expected a closing parenthesis",
-            ))),
-        },
-    }
+    consume_specific_token(&mut c.scanner, TokenType::RightParen)
 }
 
 fn prefix_minus<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
-    c.expression()?;
+    c.parse_precendence(Precedence::Unary)?;
     c.emit_op(Op::Negate);
     Ok(())
 }
@@ -227,9 +292,12 @@ mod tests {
             #[test]
             fn $name() {
                 let mut want_ops = $want_ops;
+                want_ops.push(Op::Pop);
                 want_ops.push(Op::Return);
 
-                let chunk = compile($input).unwrap();
+                let mut input: String = $input.into();
+                input.push(';');
+                let chunk = compile(&input).unwrap();
 
                 assert_eq!(chunk.constants, $want_constants);
 
@@ -314,7 +382,6 @@ mod tests {
     compiler_test!(prefix_true, "true", vec![Op::True], vec![]);
     compiler_test!(prefix_false, "false", vec![Op::False], vec![]);
     compiler_test!(prefix_nil, "nil", vec![Op::Nil], vec![]);
-    compiler_test!(prefix_not, "!", vec![Op::Not], vec![]);
     compiler_test!(boolean, "!true", vec![Op::True, Op::Not], vec![]);
     compiler_test!(
         prefix_bang_equal,
@@ -353,11 +420,29 @@ mod tests {
         vec![Op::Constant(0), Op::Constant(1), Op::Greater],
         vec![Value::Number(1.0), Value::Number(2.0)]
     );
+    compiler_test!(
+        less_than_inequality,
+        "-2>1",
+        vec![Op::Constant(0), Op::Negate, Op::Constant(1), Op::Greater],
+        vec![Value::Number(2.0), Value::Number(1.0)]
+    );
+    compiler_test!(
+        bang_comparison,
+        "! true == false",
+        vec![Op::True, Op::Not, Op::False, Op::Equal],
+        vec![]
+    );
 
     #[test]
     fn prefix_string() {
-        let want_ops = vec![Op::Constant(0), Op::Constant(1), Op::Add, Op::Return];
-        let input = "\"hello\" + \"world\"";
+        let want_ops = vec![
+            Op::Constant(0),
+            Op::Constant(1),
+            Op::Add,
+            Op::Pop,
+            Op::Return,
+        ];
+        let input = "\"hello\" + \"world\";";
         let mut chunk = compile(input).unwrap();
 
         let want_const_1 = Value::String(chunk.string_interner.intern_ref("hello"));

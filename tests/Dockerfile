@@ -16,4 +16,4 @@ COPY tests/craftinginterpreters/tool tool
 COPY tests/craftinginterpreters/test test
 RUN cd ./tool; dart pub get
 COPY --from=rustilocks /rustilocks/target/release/rustilocks /bin/
-RUN dart tool/bin/test.dart chap17_compiling -i rustilocks -a compile
+RUN dart tool/bin/test.dart chap21_global -i rustilocks -a run

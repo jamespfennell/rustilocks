@@ -80,6 +80,7 @@ impl Chunk {
                 "NEGATE" => Op::Negate,
                 "RETURN" => Op::Return,
                 "SUBTRACT" => Op::Subtract,
+                "PRINT" => Op::Print,
                 _ => panic!("unknown command {}", words[1]),
             };
             op.write(&mut bytecode);
@@ -109,6 +110,8 @@ pub enum Op {
     Equal,
     Greater,
     Less,
+    Print,
+    Pop,
 }
 
 impl Op {
@@ -145,6 +148,8 @@ impl Op {
             11 => Op::Equal,
             12 => Op::Greater,
             13 => Op::Less,
+            14 => Op::Print,
+            15 => Op::Pop,
             _ => return Err(Box::new(InvalidBytecodeError::UnknownOpCode { op_code })),
         };
         Ok((op, tail))
@@ -168,7 +173,9 @@ impl Op {
             | Op::Not
             | Op::Equal
             | Op::Greater
-            | Op::Less => {}
+            | Op::Less
+            | Op::Print
+            | Op::Pop => {}
         }
     }
 
@@ -196,6 +203,8 @@ impl Op {
             Op::Equal => format!("EQUAL"),
             Op::Greater => format!("GREATER"),
             Op::Less => format!("LESS"),
+            Op::Print => format!("PRINT"),
+            Op::Pop => format!("POP"),
         };
         println!("{:04} {}", offset, text);
     }
@@ -216,6 +225,8 @@ impl Op {
             Op::Equal => 11,
             Op::Greater => 12,
             Op::Less => 13,
+            Op::Print => 14,
+            Op::Pop => 15,
         }
     }
 }
@@ -241,6 +252,8 @@ mod tests {
             Op::Equal,
             Op::Greater,
             Op::Less,
+            Op::Print,
+            Op::Pop,
         ];
         for op in all_ops {
             let mut buffer = vec![];

@@ -6,7 +6,7 @@ mod serde;
 mod value;
 mod vm;
 
-use std::path::PathBuf;
+use std::{path::PathBuf, process::exit};
 
 use clap::{Parser, Subcommand};
 
@@ -81,8 +81,12 @@ fn main() {
                 InputFile::Assembly(s) => chunk::Chunk::assemble(&s),
                 InputFile::Binary(src) => chunk::Chunk::deserialize(&src).unwrap(),
             };
-            println!("{:?}", chunk);
-            vm::run(&chunk).unwrap();
+            let mut vm = vm::VM::default();
+            if let Err(e) = vm.run(&chunk) {
+                eprintln!("Error: {:?}", e);
+                // TODO: should copy clox's return exit codes
+                exit(70);
+            }
         }
         Command::Tokenize { input } => {
             let source_code = match InputFile::read(&input) {
