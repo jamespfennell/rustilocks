@@ -1,6 +1,6 @@
 # Rustilocks
 
-Rust implemention of the Lox bytecode intepreter in Robert Nystrom's book
+Work in progress implemention of the Lox bytecode intepreter in Robert Nystrom's book
     [Crafting Interpreters](https://craftinginterpreters.com/).
 
 This is a Rust binary crate built with the clap CLI library, so `cargo run help`
