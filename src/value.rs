@@ -44,6 +44,7 @@ impl Display for Value {
 pub mod loxstring {
     use std::collections::HashSet;
     use std::fmt::Display;
+    use std::hash::Hash;
 
     #[derive(Debug, Clone, Copy)]
     pub struct LoxString(&'static str);
@@ -70,6 +71,15 @@ pub mod loxstring {
         fn eq(&self, other: &Self) -> bool {
             // Because strings are interned, we can compare them using a fast pointer comparison.
             std::ptr::eq(self.0, other.0)
+        }
+    }
+
+    impl Eq for LoxString {}
+
+    impl Hash for LoxString {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            // Because strings are interned, we can compare them using a fast pointer comparison.
+            std::ptr::hash(self.0, state)
         }
     }
 

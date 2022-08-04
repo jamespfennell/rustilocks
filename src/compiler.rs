@@ -27,7 +27,32 @@ impl<'a> Compiler<'a> {
     }
 
     fn declaration(&mut self) -> Result<(), Box<CompilationError<'a>>> {
-        self.statement()
+        let next = match self.scanner.peek()? {
+            None => return Ok(()),
+            Some(next) => next,
+        };
+        match next.token_type {
+            TokenType::Var => {
+                self.scanner.consume()?;
+                let name = consume_specific_token(&mut self.scanner, TokenType::Identifier)?;
+                let value = Value::String(self.chunk.string_interner.intern_ref(name.source));
+                let constant_i = self.add_constant(name, value)?;
+                match self.scanner.peek()? {
+                    Some(Token {
+                        token_type: TokenType::Equal,
+                        source: _,
+                    }) => {
+                        self.scanner.consume()?;
+                        self.expression()?
+                    }
+                    _ => self.emit_op(Op::Nil),
+                };
+                consume_specific_token(&mut self.scanner, TokenType::Semicolon)?;
+                self.emit_op(Op::DefineGlobal(constant_i));
+                Ok(())
+            }
+            _ => self.statement(),
+        }
     }
 
     fn statement(&mut self) -> Result<(), Box<CompilationError<'a>>> {
@@ -97,8 +122,7 @@ impl<'a> Compiler<'a> {
         op.write(&mut self.chunk.bytecode);
     }
 
-    // TODO: should this also emit the op?
-    fn emit_constant(
+    fn add_constant(
         &mut self,
         token: Token<'a>,
         constant: Value,
@@ -115,14 +139,14 @@ impl<'a> Compiler<'a> {
 fn consume_specific_token<'a>(
     scanner: &mut scanner::Scanner<'a>,
     token_type: TokenType,
-) -> Result<(), Box<CompilationError<'a>>> {
+) -> Result<Token<'a>, Box<CompilationError<'a>>> {
     match scanner.next()? {
         None => Err(Box::new(CompilationError::UnexpectedTokenType(
             None, token_type,
         ))),
         Some(token) => {
             if token.token_type == token_type {
-                Ok(())
+                Ok(token)
             } else {
                 Err(Box::new(CompilationError::UnexpectedTokenType(
                     Some(token),
@@ -178,7 +202,7 @@ fn get_rules<'a>(
         TokenType::LessEqual => (None, Some(infix_binary), Precedence::Comparison),
 
         // Literals
-        TokenType::Identifier => (None, None, Precedence::None),
+        TokenType::Identifier => (Some(prefix_variable), None, Precedence::None),
         TokenType::String => (Some(prefix_string), None, Precedence::None),
         TokenType::Number => (Some(prefix_number), None, Precedence::None),
 
@@ -239,7 +263,8 @@ fn prefix_false<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<Compilatio
 
 fn prefix_left_paren<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
     c.expression()?;
-    consume_specific_token(&mut c.scanner, TokenType::RightParen)
+    consume_specific_token(&mut c.scanner, TokenType::RightParen)?;
+    Ok(())
 }
 
 fn prefix_minus<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
@@ -261,7 +286,7 @@ fn prefix_number<'a>(
         Ok(d) => d,
         Err(_) => return Err(Box::new(CompilationError::InvalidNumber(token))),
     };
-    let i = s.emit_constant(token, Value::Number(d))?;
+    let i = s.add_constant(token, Value::Number(d))?;
     s.emit_op(Op::Constant(i));
     Ok(())
 }
@@ -273,7 +298,7 @@ fn prefix_string<'a>(
     // We need to trim the opening and closing quotation marks.
     let s = &token.source[1..token.source.len() - 1];
     let value = Value::String(c.chunk.string_interner.intern_ref(s));
-    let i = c.emit_constant(token, value)?;
+    let i = c.add_constant(token, value)?;
     c.emit_op(Op::Constant(i));
     Ok(())
 }
@@ -283,23 +308,58 @@ fn prefix_true<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<Compilation
     Ok(())
 }
 
+fn prefix_variable<'a>(
+    c: &mut Compiler<'a>,
+    token: Token<'a>,
+) -> Result<(), Box<CompilationError<'a>>> {
+    let name = Value::String(c.chunk.string_interner.intern_ref(token.source));
+    let i = c.add_constant(token, name)?;
+    c.emit_op(Op::GetGlobal(i));
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    use crate::value::loxstring::Interner;
+
     use super::*;
+
+    fn no_op_constants_preprocesser(_: &mut Interner, v: Vec<Value>) -> Vec<Value> {
+        v
+    }
+
+    fn string_constants_preprocesser(string_interner: &mut Interner, v: Vec<&str>) -> Vec<Value> {
+        let mut out = vec![];
+        for s in v {
+            out.push(Value::String(string_interner.intern_ref(s)));
+        }
+        out
+    }
 
     macro_rules! compiler_test {
         ($name: ident, $input: expr, $want_ops: expr, $want_constants: expr) => {
+            compiler_test!(
+                $name,
+                $input,
+                $want_ops,
+                $want_constants,
+                no_op_constants_preprocesser
+            );
+        };
+        ($name: ident, $input: expr, $want_ops: expr, $want_constants: expr, $constants_preprocesser: ident) => {
             #[test]
             fn $name() {
                 let mut want_ops = $want_ops;
-                want_ops.push(Op::Pop);
                 want_ops.push(Op::Return);
 
                 let mut input: String = $input.into();
                 input.push(';');
-                let chunk = compile(&input).unwrap();
+                let mut chunk = compile(&input).unwrap();
 
-                assert_eq!(chunk.constants, $want_constants);
+                assert_eq!(
+                    chunk.constants,
+                    $constants_preprocesser(&mut chunk.string_interner, $want_constants)
+                );
 
                 let got_ops = chunk.convert_bytecode_to_ops().unwrap();
                 assert_eq!(got_ops, want_ops);
@@ -310,31 +370,31 @@ mod tests {
     compiler_test!(
         prefix_minus,
         "-123",
-        vec![Op::Constant(0), Op::Negate],
+        vec![Op::Constant(0), Op::Negate, Op::Pop],
         vec![Value::Number(123.0)]
     );
     compiler_test!(
         infix_minus,
         "1-2",
-        vec![Op::Constant(0), Op::Constant(1), Op::Subtract],
+        vec![Op::Constant(0), Op::Constant(1), Op::Subtract, Op::Pop],
         vec![Value::Number(1.0), Value::Number(2.0)]
     );
     compiler_test!(
         infix_plus,
         "1+2",
-        vec![Op::Constant(0), Op::Constant(1), Op::Add],
+        vec![Op::Constant(0), Op::Constant(1), Op::Add, Op::Pop],
         vec![Value::Number(1.0), Value::Number(2.0)]
     );
     compiler_test!(
         infix_slash,
         "1/2",
-        vec![Op::Constant(0), Op::Constant(1), Op::Divide],
+        vec![Op::Constant(0), Op::Constant(1), Op::Divide, Op::Pop],
         vec![Value::Number(1.0), Value::Number(2.0)]
     );
     compiler_test!(
         infix_star,
         "1*2",
-        vec![Op::Constant(0), Op::Constant(1), Op::Multiply],
+        vec![Op::Constant(0), Op::Constant(1), Op::Multiply, Op::Pop],
         vec![Value::Number(1.0), Value::Number(2.0)]
     );
     compiler_test!(
@@ -345,7 +405,8 @@ mod tests {
             Op::Constant(1),
             Op::Multiply,
             Op::Constant(2),
-            Op::Add
+            Op::Add,
+            Op::Pop
         ],
         vec![Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]
     );
@@ -357,14 +418,21 @@ mod tests {
             Op::Constant(1),
             Op::Constant(2),
             Op::Multiply,
-            Op::Add
+            Op::Add,
+            Op::Pop
         ],
         vec![Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]
     );
     compiler_test!(
         negation_and_multiplication,
         "1*-2",
-        vec![Op::Constant(0), Op::Constant(1), Op::Negate, Op::Multiply],
+        vec![
+            Op::Constant(0),
+            Op::Constant(1),
+            Op::Negate,
+            Op::Multiply,
+            Op::Pop
+        ],
         vec![Value::Number(1.0), Value::Number(2.0)]
     );
     compiler_test!(
@@ -375,81 +443,94 @@ mod tests {
             Op::Constant(1),
             Op::Constant(2),
             Op::Add,
-            Op::Multiply
+            Op::Multiply,
+            Op::Pop
         ],
         vec![Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]
     );
-    compiler_test!(prefix_true, "true", vec![Op::True], vec![]);
-    compiler_test!(prefix_false, "false", vec![Op::False], vec![]);
-    compiler_test!(prefix_nil, "nil", vec![Op::Nil], vec![]);
-    compiler_test!(boolean, "!true", vec![Op::True, Op::Not], vec![]);
+    compiler_test!(prefix_true, "true", vec![Op::True, Op::Pop], vec![]);
+    compiler_test!(prefix_false, "false", vec![Op::False, Op::Pop], vec![]);
+    compiler_test!(prefix_nil, "nil", vec![Op::Nil, Op::Pop], vec![]);
+    compiler_test!(boolean, "!true", vec![Op::True, Op::Not, Op::Pop], vec![]);
     compiler_test!(
         prefix_bang_equal,
         "1!=2",
-        vec![Op::Constant(0), Op::Constant(1), Op::Equal, Op::Not],
+        vec![
+            Op::Constant(0),
+            Op::Constant(1),
+            Op::Equal,
+            Op::Not,
+            Op::Pop
+        ],
         vec![Value::Number(1.0), Value::Number(2.0)]
     );
     compiler_test!(
         prefix_equal_equal,
         "1==2",
-        vec![Op::Constant(0), Op::Constant(1), Op::Equal],
+        vec![Op::Constant(0), Op::Constant(1), Op::Equal, Op::Pop],
         vec![Value::Number(1.0), Value::Number(2.0)]
     );
     compiler_test!(
         prefix_less_equal,
         "1<=2",
-        vec![Op::Constant(0), Op::Constant(1), Op::Greater, Op::Not],
+        vec![
+            Op::Constant(0),
+            Op::Constant(1),
+            Op::Greater,
+            Op::Not,
+            Op::Pop
+        ],
         vec![Value::Number(1.0), Value::Number(2.0)]
     );
     compiler_test!(
         prefix_less,
         "1<2",
-        vec![Op::Constant(0), Op::Constant(1), Op::Less],
+        vec![Op::Constant(0), Op::Constant(1), Op::Less, Op::Pop],
         vec![Value::Number(1.0), Value::Number(2.0)]
     );
     compiler_test!(
         prefix_greater_equal,
         "1>=2",
-        vec![Op::Constant(0), Op::Constant(1), Op::Less, Op::Not],
+        vec![Op::Constant(0), Op::Constant(1), Op::Less, Op::Not, Op::Pop],
         vec![Value::Number(1.0), Value::Number(2.0)]
     );
 
     compiler_test!(
         prefix_greater,
         "1>2",
-        vec![Op::Constant(0), Op::Constant(1), Op::Greater],
+        vec![Op::Constant(0), Op::Constant(1), Op::Greater, Op::Pop],
         vec![Value::Number(1.0), Value::Number(2.0)]
     );
     compiler_test!(
         less_than_inequality,
         "-2>1",
-        vec![Op::Constant(0), Op::Negate, Op::Constant(1), Op::Greater],
+        vec![
+            Op::Constant(0),
+            Op::Negate,
+            Op::Constant(1),
+            Op::Greater,
+            Op::Pop
+        ],
         vec![Value::Number(2.0), Value::Number(1.0)]
     );
     compiler_test!(
         bang_comparison,
         "! true == false",
-        vec![Op::True, Op::Not, Op::False, Op::Equal],
+        vec![Op::True, Op::Not, Op::False, Op::Equal, Op::Pop],
         vec![]
     );
-
-    #[test]
-    fn prefix_string() {
-        let want_ops = vec![
-            Op::Constant(0),
-            Op::Constant(1),
-            Op::Add,
-            Op::Pop,
-            Op::Return,
-        ];
-        let input = "\"hello\" + \"world\";";
-        let mut chunk = compile(input).unwrap();
-
-        let want_const_1 = Value::String(chunk.string_interner.intern_ref("hello"));
-        let want_const_2 = Value::String(chunk.string_interner.intern_ref("world"));
-        assert_eq!(chunk.constants, vec![want_const_1, want_const_2]);
-
-        let got_ops = chunk.convert_bytecode_to_ops().unwrap();
-        assert_eq!(got_ops, want_ops);
-    }
+    compiler_test!(
+        prefix_string,
+        "\"hello\" + \"world\"",
+        vec![Op::Constant(0), Op::Constant(1), Op::Add, Op::Pop],
+        vec!["hello", "world"],
+        string_constants_preprocesser
+    );
+    compiler_test!(
+        variable,
+        "var hello = \"world\"",
+        vec![Op::Constant(1), Op::DefineGlobal(0)],
+        vec!["hello", "world"],
+        string_constants_preprocesser
+    );
 }

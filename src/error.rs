@@ -16,6 +16,7 @@ pub enum RuntimeError {
         right_operand: Value,
         op: Op,
     },
+    UndefinedVariable(String),
 }
 
 impl From<Box<InvalidBytecodeError>> for Box<RuntimeError> {
@@ -41,6 +42,10 @@ pub enum InvalidBytecodeError {
     EmptyBytecode,
     MissingOpArgument {
         op: Op,
+    },
+    VariableNameNotString {
+        op: Op,
+        value: Value,
     },
 }
 

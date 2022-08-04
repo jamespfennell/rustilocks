@@ -54,7 +54,7 @@ fn main() {
         Command::Compile { input, output } => {
             let chunk = match InputFile::read(&input) {
                 InputFile::Lox(src) => compiler::compile(&src).unwrap(),
-                InputFile::Assembly(src) => chunk::Chunk::assemble(&src),
+                InputFile::Assembly(src) => chunk::Chunk::deserialize_from_assembly(&src),
                 InputFile::Binary(_) => panic!("can't compile .rlks files"),
             };
             let output = match output {
@@ -70,15 +70,15 @@ fn main() {
         Command::Disassemble { input } => {
             let chunk = match InputFile::read(&input) {
                 InputFile::Lox(_) => panic!("can't disassemble .lox files"),
-                InputFile::Assembly(_) => panic!("can't disassemble .lox files"),
+                InputFile::Assembly(_) => panic!("can't disassemble .loxa files"),
                 InputFile::Binary(src) => chunk::Chunk::deserialize(&src).unwrap(),
             };
-            chunk.disassemble().unwrap();
+            print!["{}", chunk.serialize_to_assembly().unwrap()];
         }
         Command::Run { input } => {
             let chunk = match InputFile::read(&input) {
                 InputFile::Lox(src) => compiler::compile(&src).unwrap(),
-                InputFile::Assembly(s) => chunk::Chunk::assemble(&s),
+                InputFile::Assembly(s) => chunk::Chunk::deserialize_from_assembly(&s),
                 InputFile::Binary(src) => chunk::Chunk::deserialize(&src).unwrap(),
             };
             let mut vm = vm::VM::default();

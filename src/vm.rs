@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use crate::chunk;
 use crate::chunk::Op;
 use crate::error::{InvalidBytecodeError, RuntimeError};
@@ -6,6 +8,7 @@ use crate::value::{loxstring, Value};
 pub struct VM {
     print_fn: Box<dyn FnMut(Value) -> ()>,
     string_interner: loxstring::Interner,
+    globals: HashMap<loxstring::LoxString, Value>,
 }
 
 impl Default for VM {
@@ -13,6 +16,7 @@ impl Default for VM {
         VM {
             print_fn: Box::new(|v| println!("{}", v)),
             string_interner: Default::default(),
+            globals: Default::default(),
         }
     }
 }
@@ -26,38 +30,7 @@ impl VM {
             match op {
                 Op::Return => return Ok(()),
                 Op::Constant(i) => {
-                    let constant_value = match chunk.constants.get(i as usize) {
-                        None => {
-                            return Err(Box::new(RuntimeError::InvalidBytecode(
-                                InvalidBytecodeError::InvalidConstantIndex {
-                                    op: op,
-                                    num_constants: chunk.constants.len(),
-                                },
-                            )))
-                        }
-                        Some(value) => value,
-                    };
-                    let value = match constant_value {
-                        Value::String(lox_string) => {
-                            // We assume that strings can be compared by pointer value because they are interned
-                            // in the same interner. The following logic copies the string from the chunk's interner (used
-                            // only for interning constant strings) to the VM's interner. This way if the same string
-                            // appears from different sources, it will be deduplicated correctly.
-                            //
-                            // As a concrete example, the source file may contain the string "hello world" and the
-                            // the expression "hello" + " " + "world". The VM will resolve both of these to the
-                            // same string, the first from reading the constant, and the second from performing
-                            // string concatenation via OP_ADD. The result of both of these must end up in the same
-                            // interner. Of course, the VM's interner is the only choice.
-                            //
-                            // Note this issue doesn't exist in the book because clox uses a global string interner
-                            // inside the global VM instance.
-                            let s = lox_string.as_str(&chunk.string_interner);
-                            Value::String(self.string_interner.intern_ref(s))
-                        }
-                        _ => *constant_value,
-                    };
-                    value_stack.push(value);
+                    value_stack.push(self.read_constant(chunk, op, i)?);
                 }
                 // Unary operators
                 Op::Negate | Op::Not => {
@@ -120,10 +93,82 @@ impl VM {
                 Op::Pop => {
                     pop_one(&mut value_stack, op)?;
                 }
+                Op::DefineGlobal(i) => {
+                    let name = self.read_constant_string(chunk, op, i)?;
+                    let value = pop_one(&mut value_stack, op)?;
+                    self.globals.insert(name, value);
+                }
+                Op::GetGlobal(i) => {
+                    let name = self.read_constant_string(chunk, op, i)?;
+                    let value = match self.globals.get(&name) {
+                        None => {
+                            return Err(Box::new(RuntimeError::UndefinedVariable(
+                                name.as_str(&self.string_interner).into(),
+                            )))
+                        }
+                        Some(value) => *value,
+                    };
+                    value_stack.push(value);
+                }
             }
             ip = new_ip;
         }
         Ok(())
+    }
+
+    fn read_constant_string(
+        &mut self,
+        chunk: &chunk::Chunk,
+        op: Op,
+        i: u8,
+    ) -> Result<loxstring::LoxString, Box<RuntimeError>> {
+        let name = self.read_constant(chunk, op, i)?;
+        match name {
+            Value::String(s) => Ok(s),
+            _ => {
+                return Err(Box::new(RuntimeError::InvalidBytecode(
+                    InvalidBytecodeError::VariableNameNotString { op, value: name },
+                )))
+            }
+        }
+    }
+
+    fn read_constant(
+        &mut self,
+        chunk: &chunk::Chunk,
+        op: Op,
+        i: u8,
+    ) -> Result<Value, Box<RuntimeError>> {
+        match chunk.constants.get(i as usize) {
+            None => {
+                return Err(Box::new(RuntimeError::InvalidBytecode(
+                    InvalidBytecodeError::InvalidConstantIndex {
+                        op: op,
+                        num_constants: chunk.constants.len(),
+                    },
+                )))
+            }
+            Some(constant_value) => match constant_value {
+                Value::String(lox_string) => {
+                    // We assume that strings can be compared by pointer value because they are interned
+                    // in the same interner. The following logic copies the string from the chunk's interner (used
+                    // only for interning constant strings) to the VM's interner. This way if the same string
+                    // appears from different sources, it will be deduplicated correctly.
+                    //
+                    // As a concrete example, the source file may contain the string "hello world" and the
+                    // the expression "hello" + " " + "world". The VM will resolve both of these to the
+                    // same string, the first from reading the constant, and the second from performing
+                    // string concatenation via OP_ADD. The result of both of these must end up in the same
+                    // interner. Of course, the VM's interner is the only choice.
+                    //
+                    // Note this issue doesn't exist in the book because clox uses a global string interner
+                    // inside the global VM instance.
+                    let s = lox_string.as_str(&chunk.string_interner);
+                    Ok(Value::String(self.string_interner.intern_ref(s)))
+                }
+                _ => Ok(*constant_value),
+            },
+        }
     }
 }
 
@@ -163,44 +208,159 @@ fn pop_two(
 
 #[cfg(test)]
 mod tests {
-    use std::{cell::RefCell, rc::Rc};
-
+    use super::*;
     use crate::{
         chunk::{self, Op},
+        value::loxstring::Interner,
         value::Value,
     };
+    use std::{cell::RefCell, rc::Rc};
 
-    use super::VM;
-
-    #[test]
-    fn test_add() {
-        let input = vec![Op::Constant(0), Op::Constant(1), Op::Add, Op::Print];
-        let mut bytecode = vec![];
-        for op in input {
-            op.write(&mut bytecode);
-        }
-        let constants = vec![Value::Number(1.0), Value::Number(2.0)];
-        let chunk = chunk::Chunk {
-            bytecode: bytecode,
-            constants,
-            string_interner: Default::default(),
-        };
-
-        // We use Rc of RefCell to avoid borrow checking pain
-        let printed_values = Rc::new(RefCell::new(vec![]));
-        let printed_values_2 = printed_values.clone();
-        let mut vm = VM {
-            print_fn: Box::new(move |v| {
-                printed_values_2.as_ref().borrow_mut().push(v);
-            }),
-            string_interner: Default::default(),
-        };
-
-        let want = vec![Value::Number(3.0)];
-
-        vm.run(&chunk).unwrap();
-        let got = printed_values.take();
-
-        assert_eq!(got, want);
+    fn no_op_constants_preprocesser(_: &mut Interner, v: Vec<Value>) -> Vec<Value> {
+        v
     }
+
+    fn string_constants_preprocesser(string_interner: &mut Interner, v: Vec<&str>) -> Vec<Value> {
+        let mut out = vec![];
+        for s in v {
+            out.push(Value::String(string_interner.intern_ref(s)));
+        }
+        out
+    }
+
+    macro_rules! vm_test {
+        ($name: ident, $in_ops: expr, $in_constants: expr, $want: expr) => {
+            vm_test!(
+                $name,
+                $in_ops,
+                $in_constants,
+                $want,
+                no_op_constants_preprocesser
+            );
+        };
+        ($name: ident, $in_ops: expr, $in_constants: expr, $want: expr, $constants_preprocesser: ident) => {
+            #[test]
+            fn $name() {
+                let input = $in_ops;
+                let mut bytecode = vec![];
+                for op in input {
+                    op.write(&mut bytecode);
+                }
+                let mut string_interner: Interner = Default::default();
+                let constants = $constants_preprocesser(&mut string_interner, $in_constants);
+                let chunk = chunk::Chunk {
+                    bytecode,
+                    constants,
+                    string_interner,
+                };
+
+                // We use Rc of RefCell to avoid borrow checking pain
+                let printed_values = Rc::new(RefCell::new(vec![]));
+                let printed_values_2 = printed_values.clone();
+                let mut string_interner: Interner = Default::default();
+                let want = $constants_preprocesser(&mut string_interner, $want);
+                let mut vm = VM {
+                    print_fn: Box::new(move |v| {
+                        printed_values_2.as_ref().borrow_mut().push(v);
+                    }),
+                    string_interner,
+                    globals: Default::default(),
+                };
+
+                vm.run(&chunk).unwrap();
+                let got = printed_values.take();
+
+                assert_eq!(got, want);
+            }
+        };
+    }
+
+    macro_rules! binary_op_test {
+        ($name: ident, $lhs: expr, $rhs: expr, $op: expr, $want: expr) => {
+            vm_test!(
+                $name,
+                vec![Op::Constant(0), Op::Constant(1), $op, Op::Print],
+                vec![$lhs, $rhs],
+                vec![$want]
+            );
+        };
+    }
+
+    binary_op_test!(
+        test_add_numbers,
+        Value::Number(1.0),
+        Value::Number(2.0),
+        Op::Add,
+        Value::Number(3.0)
+    );
+    binary_op_test!(
+        test_subtract_numbers,
+        Value::Number(1.0),
+        Value::Number(2.0),
+        Op::Subtract,
+        Value::Number(-1.0)
+    );
+    binary_op_test!(
+        test_multiply_numbers,
+        Value::Number(3.0),
+        Value::Number(2.0),
+        Op::Multiply,
+        Value::Number(6.0)
+    );
+    binary_op_test!(
+        test_divide_numbers,
+        Value::Number(7.0),
+        Value::Number(2.0),
+        Op::Divide,
+        Value::Number(3.5)
+    );
+    binary_op_test!(
+        test_greater_1,
+        Value::Number(7.0),
+        Value::Number(2.0),
+        Op::Greater,
+        Value::Bool(true)
+    );
+    binary_op_test!(
+        test_greater_2,
+        Value::Number(2.0),
+        Value::Number(7.0),
+        Op::Greater,
+        Value::Bool(false)
+    );
+    binary_op_test!(
+        test_less_1,
+        Value::Number(7.0),
+        Value::Number(2.0),
+        Op::Less,
+        Value::Bool(false)
+    );
+    binary_op_test!(
+        test_less_2,
+        Value::Number(2.0),
+        Value::Number(7.0),
+        Op::Less,
+        Value::Bool(true)
+    );
+    binary_op_test!(
+        test_equal_1,
+        Value::Number(7.0),
+        Value::Number(2.0),
+        Op::Equal,
+        Value::Bool(false)
+    );
+    binary_op_test!(
+        test_equal_2,
+        Value::Number(2.0),
+        Value::Number(2.0),
+        Op::Equal,
+        Value::Bool(true)
+    );
+    vm_test!(
+        test_add_strings,
+        vec![Op::Constant(0), Op::Constant(1), Op::Add, Op::Print],
+        vec!["hello", "world"],
+        vec!["helloworld"],
+        string_constants_preprocesser
+    );
 }

@@ -39,49 +39,27 @@ impl Chunk {
         Ok(ops)
     }
 
-    pub fn disassemble(&self) -> Result<(), Box<InvalidBytecodeError>> {
+    pub fn serialize_to_assembly(&self) -> Result<String, Box<InvalidBytecodeError>> {
         println!("%%%% chunk %%%%");
         let mut ip: &[u8] = &self.bytecode;
+        let mut result = String::new();
         while !ip.is_empty() {
             let (op_code, new_ip) = Op::read(ip)?;
-            op_code.disassemble(self.bytecode.len() - ip.len(), &self.constants);
+            let new_line =
+                op_code.write_to_assembly(self.bytecode.len() - ip.len(), &self.constants);
+            result.push_str(&new_line);
             ip = new_ip;
         }
-        Ok(())
+        Ok(result)
     }
 
-    pub fn assemble(source: &str) -> Chunk {
-        let mut label_to_offset: HashMap<&str, usize> = HashMap::new();
+    pub fn deserialize_from_assembly(source: &str) -> Chunk {
         let mut bytecode = vec![];
         let mut constants = vec![];
         for line in source.lines() {
-            let line = match line.find('%') {
-                None => line,
-                Some(i) => &line[..i],
-            };
-            let words: Vec<&str> = line.split_whitespace().collect();
-            if words.is_empty() {
-                continue;
-            }
-            label_to_offset.insert(words[0], bytecode.len());
-            let op = match words[1] {
-                "ADD" => Op::Add,
-                "CONSTANT" => {
-                    let raw_value = words[2];
-                    match raw_value.chars().next().unwrap() {
-                        '0'..='9' => {
-                            constants.push(Value::Number(raw_value.parse::<f64>().unwrap()));
-                            Op::Constant((constants.len() - 1) as u8)
-                        }
-                        _ => panic!("could not read constant"),
-                    }
-                }
-                "MULTIPLY" => Op::Multiply,
-                "NEGATE" => Op::Negate,
-                "RETURN" => Op::Return,
-                "SUBTRACT" => Op::Subtract,
-                "PRINT" => Op::Print,
-                _ => panic!("unknown command {}", words[1]),
+            let op = match Op::read_from_assembly(line, &mut constants) {
+                None => continue,
+                Some(op) => op,
             };
             op.write(&mut bytecode);
         }
@@ -112,6 +90,8 @@ pub enum Op {
     Less,
     Print,
     Pop,
+    DefineGlobal(u8),
+    GetGlobal(u8),
 }
 
 impl Op {
@@ -122,20 +102,18 @@ impl Op {
             None => return Err(Box::new(InvalidBytecodeError::EmptyBytecode)),
             Some((i, tail)) => (*i, tail),
         };
+        let mut read_one = || match tail.split_first() {
+            None => Err(Box::new(InvalidBytecodeError::MissingOpArgument {
+                op: Op::Constant(0),
+            })),
+            Some((i, new_tail)) => {
+                tail = new_tail;
+                Ok(*i)
+            }
+        };
         let op = match op_code {
             0 => Op::Return,
-            1 => {
-                let (i, new_tail) = match tail.split_first() {
-                    None => {
-                        return Err(Box::new(InvalidBytecodeError::MissingOpArgument {
-                            op: Op::Constant(0),
-                        }))
-                    }
-                    Some((i, tail)) => (*i, tail),
-                };
-                tail = new_tail;
-                Op::Constant(i)
-            }
+            1 => Op::Constant(read_one()?),
             2 => Op::Negate,
             3 => Op::Add,
             4 => Op::Subtract,
@@ -150,6 +128,8 @@ impl Op {
             13 => Op::Less,
             14 => Op::Print,
             15 => Op::Pop,
+            16 => Op::DefineGlobal(read_one()?),
+            17 => Op::GetGlobal(read_one()?),
             _ => return Err(Box::new(InvalidBytecodeError::UnknownOpCode { op_code })),
         };
         Ok((op, tail))
@@ -158,7 +138,7 @@ impl Op {
     pub fn write(&self, buffer: &mut Vec<u8>) {
         buffer.push(self.op_code());
         match self {
-            Op::Constant(i) => {
+            Op::Constant(i) | Op::DefineGlobal(i) | Op::GetGlobal(i) => {
                 buffer.push(*i);
             }
             Op::Return
@@ -179,34 +159,78 @@ impl Op {
         }
     }
 
-    fn disassemble(&self, offset: usize, constants: &[Value]) {
-        let text = match self {
-            Op::Constant(i) => {
-                format!(
-                    "CONSTANT {}",
-                    match constants.get(*i as usize) {
-                        None => format!("{} <invalid: only {} constants>", *i, constants.len()),
-                        Some(value) => format!("{} %index={}", value, *i),
-                    }
-                )
-            }
-            Op::Return => format!("RETURN"),
-            Op::Negate => format!("NEGATE"),
-            Op::Add => format!("ADD"),
-            Op::Subtract => format!("SUBTRACT"),
-            Op::Multiply => format!("MULTIPLY"),
-            Op::Divide => format!("DIVIDE"),
-            Op::True => format!("TRUE"),
-            Op::False => format!("FALSE"),
-            Op::Nil => format!("NIL"),
-            Op::Not => format!("NOT"),
-            Op::Equal => format!("EQUAL"),
-            Op::Greater => format!("GREATER"),
-            Op::Less => format!("LESS"),
-            Op::Print => format!("PRINT"),
-            Op::Pop => format!("POP"),
+    fn write_to_assembly(&self, offset: usize, constants: &[Value]) -> String {
+        let command = match self {
+            Op::Constant(_) => "CONSTANT",
+            Op::Return => "RETURN",
+            Op::Negate => "NEGATE",
+            Op::Add => "ADD",
+            Op::Subtract => "SUBTRACT",
+            Op::Multiply => "MULTIPLY",
+            Op::Divide => "DIVIDE",
+            Op::True => "TRUE",
+            Op::False => "FALSE",
+            Op::Nil => "NIL",
+            Op::Not => "NOT",
+            Op::Equal => "EQUAL",
+            Op::Greater => "GREATER",
+            Op::Less => "LESS",
+            Op::Print => "PRINT",
+            Op::Pop => "POP",
+            Op::DefineGlobal(_) => "DEFINE_GLOBAL",
+            Op::GetGlobal(_) => "GET_GLOBAL",
         };
-        println!("{:04} {}", offset, text);
+        let tail = match self {
+            Op::Constant(i) | Op::DefineGlobal(i) | Op::GetGlobal(i) => {
+                let value = constants.get(*i as usize).unwrap();
+                format!("{} %index={}", value, *i)
+            }
+            _ => String::new(),
+        };
+        format!("{:04} {} {}", offset, command, tail)
+    }
+
+    fn read_from_assembly(line: &str, constants: &mut Vec<Value>) -> Option<Op> {
+        let line = match line.find('%') {
+            None => line,
+            Some(i) => &line[..i],
+        };
+        let words: Vec<&str> = line.split_whitespace().collect();
+        if words.is_empty() {
+            return None;
+        }
+        let  mut read_constant = || {
+            let raw_value = words[2];
+            match raw_value.chars().next().unwrap() {
+                '0'..='9' => {
+                    constants.push(Value::Number(raw_value.parse::<f64>().unwrap()));
+                    (constants.len() - 1) as u8
+                }
+                _ => panic!("could not read constant"),
+            }
+        };
+        let op = match words[1] {
+            "RETURN" => Op::Return,
+            "CONSTANT" => Op::Constant(read_constant()),
+            "NEGATE" => Op::Negate,
+            "ADD" => Op::Add,
+            "SUBTRACT" => Op::Subtract,
+            "MULTIPLY" => Op::Multiply,
+            "DIVIDE" => Op::Divide,
+            "TRUE" => Op::True,
+            "FALSE" => Op::False,
+            "NIL" => Op::Nil,
+            "NOT" => Op::Not,
+            "EQUAL" => Op::Equal,
+            "GREATER" => Op::Greater,
+            "LESS" => Op::Less,
+            "PRINT" => Op::Print,
+            "POP" => Op::Pop,
+            "DEFINE_GLOBAL" => Op::DefineGlobal(read_constant()),
+            "GET_GLOBAL" => Op::GetGlobal(read_constant()),
+            _ => panic!("unknown command {}", words[1]),
+        };
+        Some(op)
     }
 
     fn op_code(&self) -> u8 {
@@ -227,6 +251,8 @@ impl Op {
             Op::Less => 13,
             Op::Print => 14,
             Op::Pop => 15,
+            Op::DefineGlobal(_) => 16,
+            Op::GetGlobal(_) => 17,
         }
     }
 }
@@ -235,32 +261,55 @@ impl Op {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_op_round_trip() {
-        let all_ops = vec![
-            Op::Constant(3),
-            Op::Return,
-            Op::Negate,
-            Op::Add,
-            Op::Subtract,
-            Op::Multiply,
-            Op::Divide,
-            Op::True,
-            Op::False,
-            Op::Nil,
-            Op::Not,
-            Op::Equal,
-            Op::Greater,
-            Op::Less,
-            Op::Print,
-            Op::Pop,
-        ];
-        for op in all_ops {
-            let mut buffer = vec![];
-            op.write(&mut buffer);
-            let (out_op, tail) = Op::read(&buffer).unwrap();
-            assert_eq!(op, out_op);
-            assert!(tail.is_empty());
-        }
+    macro_rules! op_round_trip_test {
+        ($(($name: ident, $op: expr),)+) => {
+            $(
+                mod $name {
+                    use super::*;
+                    #[test]
+                    fn bytecode_round_trip() {
+                        let op = $op;
+                        let mut buffer = vec![];
+                        op.write(&mut buffer);
+                        let (out_op, tail) = Op::read(&buffer).unwrap();
+                        assert_eq!(op, out_op);
+                        assert!(tail.is_empty());
+                    }
+
+                    #[test]
+                    fn assembly_round_trip() {
+                        let op = $op;
+
+                        let constants = vec![Value::Number(1.0), Value::Number(2.0)];
+                        let assembly = op.write_to_assembly(0, &constants);
+                        let mut constants = vec![Value::Number(1.0)];
+                        let got_op = Op::read_from_assembly(&assembly, &mut constants).unwrap();
+
+                        assert_eq!(got_op, op);
+                    }
+                }
+            )+
+        };
     }
+
+    op_round_trip_test!(
+        (constant, Op::Constant(1)),
+        (return_, Op::Return),
+        (negate, Op::Negate),
+        (add, Op::Add),
+        (subtract, Op::Subtract),
+        (multiply, Op::Multiply),
+        (divide, Op::Divide),
+        (true_, Op::True),
+        (false_, Op::False),
+        (nil, Op::Nil),
+        (not, Op::Not),
+        (equal, Op::Equal),
+        (greater, Op::Greater),
+        (less, Op::Less),
+        (print, Op::Print),
+        (pop, Op::Pop),
+        (define_global, Op::DefineGlobal(1)),
+        (get_global, Op::GetGlobal(1)),
+    );
 }
