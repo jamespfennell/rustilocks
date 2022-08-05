@@ -77,7 +77,14 @@ fn main() {
         }
         Command::Run { input } => {
             let chunk = match InputFile::read(&input) {
-                InputFile::Lox(src) => compiler::compile(&src).unwrap(),
+                InputFile::Lox(src) => match compiler::compile(&src) {
+                    Ok(chunk) => chunk,
+                    Err(e) => {
+                        eprintln!("Error: {:?}", e);
+                        // TODO: should copy clox's return exit codes
+                        exit(65);
+                    }
+                },
                 InputFile::Assembly(s) => chunk::Chunk::deserialize_from_assembly(&s),
                 InputFile::Binary(src) => chunk::Chunk::deserialize(&src).unwrap(),
             };

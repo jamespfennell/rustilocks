@@ -29,8 +29,8 @@ The binary operates on 3 file formats:
 
 ## Status
 
-- Chapter 14-22: done
+- Chapter 14-21: done
 
-- Chapter 23: in progress.
+- Chapter 22: in progress.
 
 - Chapter 24-29: to be started

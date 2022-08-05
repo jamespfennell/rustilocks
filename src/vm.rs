@@ -110,6 +110,23 @@ impl VM {
                     };
                     value_stack.push(value);
                 }
+                Op::SetGlobal(i) => {
+                    let name = self.read_constant_string(chunk, op, i)?;
+                    let new_value = pop_one(&mut value_stack, op)?;
+                    match self.globals.get_mut(&name) {
+                        None => {
+                            return Err(Box::new(RuntimeError::UndefinedVariable(
+                                name.as_str(&self.string_interner).into(),
+                            )))
+                        }
+                        Some(value) => {
+                            *value = new_value;
+                        }
+                    };
+                    // This handles the Lox code `a = (b = 3);`. In general, assignment is an
+                    // expression which leaves the value on the stack.
+                    value_stack.push(new_value);
+                }
             }
             ip = new_ip;
         }

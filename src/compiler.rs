@@ -96,7 +96,8 @@ impl<'a> Compiler<'a> {
             }
             Some(prefix_rule) => prefix_rule,
         };
-        prefix_rule(self, token)?;
+        let can_assign = precedence <= Precedence::Assignment;
+        prefix_rule(self, token, can_assign)?;
 
         loop {
             let token = match self.scanner.peek()? {
@@ -113,7 +114,12 @@ impl<'a> Compiler<'a> {
                 Some(infix_rule) => infix_rule,
             };
             self.scanner.consume()?;
-            infix_rule(self, token)?;
+            infix_rule(self, token, can_assign)?;
+        }
+        if let Some(token) = match_token_type(&mut self.scanner, TokenType::Equal)? {
+            if can_assign {
+                return Err(Box::new(CompilationError::InvalidAssignmentTarget(token)));
+            }
         }
         Ok(())
     }
@@ -172,7 +178,8 @@ enum Precedence {
     Primary = 10,
 }
 
-type ParseRule<'a> = fn(s: &mut Compiler<'a>, Token<'a>) -> Result<(), Box<CompilationError<'a>>>;
+type ParseRule<'a> =
+    fn(s: &mut Compiler<'a>, Token<'a>, bool) -> Result<(), Box<CompilationError<'a>>>;
 
 fn get_rules<'a>(
     token_type: TokenType,
@@ -228,7 +235,11 @@ fn get_rules<'a>(
 
 // TODO: if this turns out to be the only infix function then we should refactor the code to
 // not go through the rules at all. This way we could avoid double matching on the token type.
-fn infix_binary<'a>(c: &mut Compiler<'a>, token: Token) -> Result<(), Box<CompilationError<'a>>> {
+fn infix_binary<'a>(
+    c: &mut Compiler<'a>,
+    token: Token,
+    _: bool,
+) -> Result<(), Box<CompilationError<'a>>> {
     let (next_precedence, op_1, op_2) = match token.token_type {
         TokenType::Plus => (Precedence::Factor, Op::Add, None),
         TokenType::Minus => (Precedence::Factor, Op::Subtract, None),
@@ -250,30 +261,50 @@ fn infix_binary<'a>(c: &mut Compiler<'a>, token: Token) -> Result<(), Box<Compil
     Ok(())
 }
 
-fn prefix_bang<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
+fn prefix_bang<'a>(
+    c: &mut Compiler<'a>,
+    _: Token,
+    _: bool,
+) -> Result<(), Box<CompilationError<'a>>> {
     c.parse_precendence(Precedence::Unary)?;
     c.emit_op(Op::Not);
     Ok(())
 }
 
-fn prefix_false<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
+fn prefix_false<'a>(
+    c: &mut Compiler<'a>,
+    _: Token,
+    _: bool,
+) -> Result<(), Box<CompilationError<'a>>> {
     c.emit_op(Op::False);
     Ok(())
 }
 
-fn prefix_left_paren<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
+fn prefix_left_paren<'a>(
+    c: &mut Compiler<'a>,
+    _: Token,
+    _: bool,
+) -> Result<(), Box<CompilationError<'a>>> {
     c.expression()?;
     consume_specific_token(&mut c.scanner, TokenType::RightParen)?;
     Ok(())
 }
 
-fn prefix_minus<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
+fn prefix_minus<'a>(
+    c: &mut Compiler<'a>,
+    _: Token,
+    _: bool,
+) -> Result<(), Box<CompilationError<'a>>> {
     c.parse_precendence(Precedence::Unary)?;
     c.emit_op(Op::Negate);
     Ok(())
 }
 
-fn prefix_nil<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
+fn prefix_nil<'a>(
+    c: &mut Compiler<'a>,
+    _: Token,
+    _: bool,
+) -> Result<(), Box<CompilationError<'a>>> {
     c.emit_op(Op::Nil);
     Ok(())
 }
@@ -281,6 +312,7 @@ fn prefix_nil<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationE
 fn prefix_number<'a>(
     s: &mut Compiler<'a>,
     token: Token<'a>,
+    _: bool,
 ) -> Result<(), Box<CompilationError<'a>>> {
     let d = match token.source.parse::<f64>() {
         Ok(d) => d,
@@ -294,6 +326,7 @@ fn prefix_number<'a>(
 fn prefix_string<'a>(
     c: &mut Compiler<'a>,
     token: Token<'a>,
+    _: bool,
 ) -> Result<(), Box<CompilationError<'a>>> {
     // We need to trim the opening and closing quotation marks.
     let s = &token.source[1..token.source.len() - 1];
@@ -303,7 +336,11 @@ fn prefix_string<'a>(
     Ok(())
 }
 
-fn prefix_true<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<CompilationError<'a>>> {
+fn prefix_true<'a>(
+    c: &mut Compiler<'a>,
+    _: Token,
+    _: bool,
+) -> Result<(), Box<CompilationError<'a>>> {
     c.emit_op(Op::True);
     Ok(())
 }
@@ -311,11 +348,30 @@ fn prefix_true<'a>(c: &mut Compiler<'a>, _: Token) -> Result<(), Box<Compilation
 fn prefix_variable<'a>(
     c: &mut Compiler<'a>,
     token: Token<'a>,
+    can_assign: bool,
 ) -> Result<(), Box<CompilationError<'a>>> {
     let name = Value::String(c.chunk.string_interner.intern_ref(token.source));
     let i = c.add_constant(token, name)?;
-    c.emit_op(Op::GetGlobal(i));
+    if can_assign && match_token_type(&mut c.scanner, TokenType::Equal)?.is_some() {
+        c.expression()?;
+        c.emit_op(Op::SetGlobal(i));
+    } else {
+        c.emit_op(Op::GetGlobal(i));
+    };
     Ok(())
+}
+
+fn match_token_type<'a>(
+    scanner: &mut scanner::Scanner<'a>,
+    token_type: TokenType,
+) -> Result<Option<Token<'a>>, Box<CompilationError<'a>>> {
+    let next_token = scanner.peek()?;
+    if next_token.map(|t| t.token_type) == Some(token_type) {
+        scanner.consume()?;
+        Ok(next_token)
+    } else {
+        Ok(None)
+    }
 }
 
 #[cfg(test)]
@@ -527,9 +583,30 @@ mod tests {
         string_constants_preprocesser
     );
     compiler_test!(
-        variable,
+        new_variable,
         "var hello = \"world\"",
         vec![Op::Constant(1), Op::DefineGlobal(0)],
+        vec!["hello", "world"],
+        string_constants_preprocesser
+    );
+    compiler_test!(
+        new_nil_variable,
+        "var hello",
+        vec![Op::Nil, Op::DefineGlobal(0)],
+        vec!["hello"],
+        string_constants_preprocesser
+    );
+    compiler_test!(
+        get_variable,
+        "hello + world",
+        vec![Op::GetGlobal(0), Op::GetGlobal(1), Op::Add, Op::Pop],
+        vec!["hello", "world"],
+        string_constants_preprocesser
+    );
+    compiler_test!(
+        overwrite_variable,
+        "hello = \"world\"",
+        vec![Op::Constant(1), Op::SetGlobal(0), Op::Pop],
         vec!["hello", "world"],
         string_constants_preprocesser
     );

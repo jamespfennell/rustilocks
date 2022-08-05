@@ -63,6 +63,7 @@ pub enum CompilationError<'a> {
     UnexpectedTokenType(Option<Token<'a>>, TokenType),
     MissingToken(&'static str),
     InvalidNumber(Token<'a>),
+    InvalidAssignmentTarget(Token<'a>),
 }
 
 impl<'a> From<Box<ScannerError<'a>>> for Box<CompilationError<'a>> {

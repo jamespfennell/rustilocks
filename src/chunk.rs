@@ -48,6 +48,7 @@ impl Chunk {
             let new_line =
                 op_code.write_to_assembly(self.bytecode.len() - ip.len(), &self.constants);
             result.push_str(&new_line);
+            result.push('\n');
             ip = new_ip;
         }
         Ok(result)
@@ -92,6 +93,7 @@ pub enum Op {
     Pop,
     DefineGlobal(u8),
     GetGlobal(u8),
+    SetGlobal(u8),
 }
 
 impl Op {
@@ -130,6 +132,7 @@ impl Op {
             15 => Op::Pop,
             16 => Op::DefineGlobal(read_one()?),
             17 => Op::GetGlobal(read_one()?),
+            18 => Op::SetGlobal(read_one()?),
             _ => return Err(Box::new(InvalidBytecodeError::UnknownOpCode { op_code })),
         };
         Ok((op, tail))
@@ -138,7 +141,7 @@ impl Op {
     pub fn write(&self, buffer: &mut Vec<u8>) {
         buffer.push(self.op_code());
         match self {
-            Op::Constant(i) | Op::DefineGlobal(i) | Op::GetGlobal(i) => {
+            Op::Constant(i) | Op::DefineGlobal(i) | Op::GetGlobal(i) | Op::SetGlobal(i) => {
                 buffer.push(*i);
             }
             Op::Return
@@ -179,11 +182,21 @@ impl Op {
             Op::Pop => "POP",
             Op::DefineGlobal(_) => "DEFINE_GLOBAL",
             Op::GetGlobal(_) => "GET_GLOBAL",
+            Op::SetGlobal(_) => "SET_GLOBAL",
         };
         let tail = match self {
-            Op::Constant(i) | Op::DefineGlobal(i) | Op::GetGlobal(i) => {
+            Op::Constant(i) | Op::DefineGlobal(i) | Op::GetGlobal(i) | Op::SetGlobal(i) => {
                 let value = constants.get(*i as usize).unwrap();
-                format!("{} %index={}", value, *i)
+                format!(
+                    "{} % index={}",
+                    match value {
+                        Value::Number(f) => format!("{}", f),
+                        Value::Bool(t) => format!("{}", t),
+                        Value::Nil => format!("nil"),
+                        Value::String(s) => format!("\"{}\"", s),
+                    },
+                    *i
+                )
             }
             _ => String::new(),
         };
@@ -199,7 +212,7 @@ impl Op {
         if words.is_empty() {
             return None;
         }
-        let  mut read_constant = || {
+        let mut read_constant = || {
             let raw_value = words[2];
             match raw_value.chars().next().unwrap() {
                 '0'..='9' => {
@@ -228,6 +241,7 @@ impl Op {
             "POP" => Op::Pop,
             "DEFINE_GLOBAL" => Op::DefineGlobal(read_constant()),
             "GET_GLOBAL" => Op::GetGlobal(read_constant()),
+            "SET_GLOBAL" => Op::SetGlobal(read_constant()),
             _ => panic!("unknown command {}", words[1]),
         };
         Some(op)
@@ -253,6 +267,7 @@ impl Op {
             Op::Pop => 15,
             Op::DefineGlobal(_) => 16,
             Op::GetGlobal(_) => 17,
+            Op::SetGlobal(_) => 18,
         }
     }
 }
@@ -311,5 +326,6 @@ mod tests {
         (pop, Op::Pop),
         (define_global, Op::DefineGlobal(1)),
         (get_global, Op::GetGlobal(1)),
+        (set_global, Op::SetGlobal(1)),
     );
 }

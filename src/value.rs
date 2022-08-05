@@ -34,7 +34,7 @@ impl Display for Value {
         match self {
             Value::Number(d) => d.fmt(f),
             Value::Bool(b) => b.fmt(f),
-            Value::Nil => "<nil>".fmt(f),
+            Value::Nil => "nil".fmt(f),
             Value::String(s) => s.fmt(f),
         }
     }
