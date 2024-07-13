@@ -39,9 +39,9 @@ impl Chunk {
     }
 
     pub fn serialize_to_assembly(&self) -> Result<String, Box<InvalidBytecodeError>> {
-        println!("%%%% chunk %%%%");
         let mut ip: &[u8] = &self.bytecode;
         let mut result = String::new();
+        result.push_str("%%%% bytecode %%%%\n");
         while !ip.is_empty() {
             let (op_code, new_ip) = Op::read(ip)?;
             let new_line =
@@ -49,6 +49,10 @@ impl Chunk {
             result.push_str(&new_line);
             result.push('\n');
             ip = new_ip;
+        }
+        result.push_str("%%%% constants %%%%\n");
+        for (i, value) in self.constants.iter().enumerate() {
+            result.push_str(&format!("% {i}: {value}\n"))
         }
         Ok(result)
     }
@@ -186,16 +190,7 @@ impl Op {
         let tail = match self {
             Op::Constant(i) | Op::DefineGlobal(i) | Op::GetGlobal(i) | Op::SetGlobal(i) => {
                 let value = constants.get(*i as usize).unwrap();
-                format!(
-                    "{} % index={}",
-                    match value {
-                        Value::Number(f) => format!("{}", f),
-                        Value::Bool(t) => format!("{}", t),
-                        Value::Nil => "nil".to_string(),
-                        Value::String(s) => format!("\"{}\"", s),
-                    },
-                    *i
-                )
+                format!("{value} % constants_index={i}")
             }
             _ => String::new(),
         };
