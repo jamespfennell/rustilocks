@@ -108,7 +108,7 @@ pub mod loxstring {
             }
             let b = Box::leak(s.into_boxed_str());
             self.strings.insert(b);
-            return LoxString(b);
+            LoxString(b)
         }
     }
 

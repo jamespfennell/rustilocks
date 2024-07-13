@@ -24,7 +24,7 @@ impl<'a> Scanner<'a> {
         if self.cache.is_none() {
             self.cache = self.scan()?;
         }
-        Ok(self.cache.clone())
+        Ok(self.cache)
     }
 
     pub fn consume(&mut self) -> Result<(), Box<ScannerError<'a>>> {
@@ -103,7 +103,7 @@ impl<'a> Scanner<'a> {
                         }
                         '.' => {
                             len += 1;
-                            while let Some(c) = chars.next() {
+                            for c in chars.by_ref() {
                                 match c {
                                     '0'..='9' => {
                                         len += 1;
@@ -119,7 +119,7 @@ impl<'a> Scanner<'a> {
             }
             'A'..='Z' | 'a'..='z' | '_' => {
                 let mut len = 1;
-                while let Some(c) = chars.next() {
+                for c in chars {
                     match c {
                         'A'..='Z' | 'a'..='z' | '_' | '0'..='9' => {
                             len += 1;
@@ -148,7 +148,7 @@ fn skip_whitespace(source: &str) -> &str {
             '/' => {
                 if chars.next() == Some('/') {
                     bytes_to_skip += 2;
-                    while let Some(c) = chars.next() {
+                    for c in chars.by_ref() {
                         bytes_to_skip += c.len_utf8();
                         if c == '\n' {
                             break;

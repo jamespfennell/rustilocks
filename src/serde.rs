@@ -18,7 +18,7 @@ pub fn deserialize_chunk(b: &[u8]) -> Result<chunk::Chunk, String> {
         return Err(format!("found {} trailing bytes", tail.len()));
     }
     let mut string_interner: Interner = Default::default();
-    let constants = deserialize_values(&value_bytes, &mut string_interner)?;
+    let constants = deserialize_values(value_bytes, &mut string_interner)?;
     Ok(chunk::Chunk {
         bytecode: bytecode.into(),
         constants,
@@ -33,16 +33,16 @@ fn serialize_bytes(target: &mut Vec<u8>, b: &[u8]) {
 
 fn deserialize_bytes(mut b: &[u8]) -> Result<(&[u8], &[u8]), String> {
     let (u_raw, tail) = match split_array::<8>(b) {
-        None => return Err(format!("no 8 byte size value preceeding byte slice")),
+        None => return Err("no 8 byte size value preceding byte slice".to_string()),
         Some(t) => t,
     };
     b = tail;
     let len: usize = match u64::from_be_bytes(u_raw).try_into() {
         Ok(len) => len,
-        Err(_) => return Err(format!("byte slice is to big for this architecture")),
+        Err(_) => return Err("byte slice is to big for this architecture".to_string()),
     };
     let (head, tail) = match b.len() < len {
-        true => return Err(format!("truncated byte slice")),
+        true => return Err("truncated byte slice".to_string()),
         false => b.split_at(len),
     };
     Ok((head, tail))
@@ -87,15 +87,15 @@ fn deserialize_values(
         let value = match code {
             0 => {
                 let (f_raw, tail) = match split_array::<8>(b) {
-                    None => return Err(format!("no 8 byte value following number code")),
+                    None => return Err("no 8 byte value following number code".to_string()),
                     Some(t) => t,
                 };
                 b = tail;
                 Value::Number(f64::from_be_bytes(f_raw))
             }
             1 => {
-                let v = match b.get(0).copied() {
-                    None => return Err(format!("no value following boolean code")),
+                let v = match b.first().copied() {
+                    None => return Err("no value following boolean code".to_string()),
                     Some(0) => true,
                     Some(1) => false,
                     Some(i) => return Err(format!("unknown value {} for boolean", i)),
@@ -109,7 +109,7 @@ fn deserialize_values(
                 b = tail;
                 let s = match std::str::from_utf8(s_raw) {
                     Ok(s) => s,
-                    Err(_) => return Err(format!("non-ut8 string")),
+                    Err(_) => return Err("non-ut8 string".to_string()),
                 };
                 Value::String(interner.intern_ref(s))
             }
@@ -133,8 +133,6 @@ fn split_array<const N: usize>(b: &[u8]) -> Option<([u8; N], &[u8])> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::value::loxstring::Interner;
-    use crate::value::Value;
 
     #[test]
     fn serde_chunk() {

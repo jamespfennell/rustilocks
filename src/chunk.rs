@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use crate::error::InvalidBytecodeError;
 use crate::serde;
 use crate::value::loxstring;
@@ -21,13 +19,14 @@ impl Chunk {
         }
     }
     pub fn serialize(&self) -> Vec<u8> {
-        serde::serialize_chunk(&self)
+        serde::serialize_chunk(self)
     }
 
     pub fn deserialize(src: &[u8]) -> Result<Chunk, String> {
         serde::deserialize_chunk(src)
     }
 
+    #[cfg(test)]
     pub fn convert_bytecode_to_ops(&self) -> Result<Vec<Op>, Box<InvalidBytecodeError>> {
         let mut ops = vec![];
         let mut bytecode: &[u8] = &self.bytecode;
@@ -192,7 +191,7 @@ impl Op {
                     match value {
                         Value::Number(f) => format!("{}", f),
                         Value::Bool(t) => format!("{}", t),
-                        Value::Nil => format!("nil"),
+                        Value::Nil => "nil".to_string(),
                         Value::String(s) => format!("\"{}\"", s),
                     },
                     *i

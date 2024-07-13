@@ -6,7 +6,7 @@ use crate::error::{InvalidBytecodeError, RuntimeError};
 use crate::value::{loxstring, Value};
 
 pub struct VM {
-    print_fn: Box<dyn FnMut(Value) -> ()>,
+    print_fn: Box<dyn FnMut(Value)>,
     string_interner: loxstring::Interner,
     globals: HashMap<loxstring::LoxString, Value>,
 }
@@ -142,11 +142,9 @@ impl VM {
         let name = self.read_constant(chunk, op, i)?;
         match name {
             Value::String(s) => Ok(s),
-            _ => {
-                return Err(Box::new(RuntimeError::InvalidBytecode(
-                    InvalidBytecodeError::VariableNameNotString { op, value: name },
-                )))
-            }
+            _ => Err(Box::new(RuntimeError::InvalidBytecode(
+                InvalidBytecodeError::VariableNameNotString { op, value: name },
+            ))),
         }
     }
 
@@ -157,14 +155,12 @@ impl VM {
         i: u8,
     ) -> Result<Value, Box<RuntimeError>> {
         match chunk.constants.get(i as usize) {
-            None => {
-                return Err(Box::new(RuntimeError::InvalidBytecode(
-                    InvalidBytecodeError::InvalidConstantIndex {
-                        op: op,
-                        num_constants: chunk.constants.len(),
-                    },
-                )))
-            }
+            None => Err(Box::new(RuntimeError::InvalidBytecode(
+                InvalidBytecodeError::InvalidConstantIndex {
+                    op,
+                    num_constants: chunk.constants.len(),
+                },
+            ))),
             Some(constant_value) => match constant_value {
                 Value::String(lox_string) => {
                     // We assume that strings can be compared by pointer value because they are interned
@@ -226,18 +222,14 @@ fn pop_two(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        chunk::{self, Op},
-        value::loxstring::Interner,
-        value::Value,
-    };
+    use crate::value::loxstring::Interner;
     use std::{cell::RefCell, rc::Rc};
 
-    fn no_op_constants_preprocesser(_: &mut Interner, v: Vec<Value>) -> Vec<Value> {
+    fn no_op_constants_preprocessor(_: &mut Interner, v: Vec<Value>) -> Vec<Value> {
         v
     }
 
-    fn string_constants_preprocesser(string_interner: &mut Interner, v: Vec<&str>) -> Vec<Value> {
+    fn string_constants_preprocessor(string_interner: &mut Interner, v: Vec<&str>) -> Vec<Value> {
         let mut out = vec![];
         for s in v {
             out.push(Value::String(string_interner.intern_ref(s)));
@@ -252,10 +244,10 @@ mod tests {
                 $in_ops,
                 $in_constants,
                 $want,
-                no_op_constants_preprocesser
+                no_op_constants_preprocessor
             );
         };
-        ($name: ident, $in_ops: expr, $in_constants: expr, $want: expr, $constants_preprocesser: ident) => {
+        ($name: ident, $in_ops: expr, $in_constants: expr, $want: expr, $constants_preprocessor: ident) => {
             #[test]
             fn $name() {
                 let input = $in_ops;
@@ -264,7 +256,7 @@ mod tests {
                     op.write(&mut bytecode);
                 }
                 let mut string_interner: Interner = Default::default();
-                let constants = $constants_preprocesser(&mut string_interner, $in_constants);
+                let constants = $constants_preprocessor(&mut string_interner, $in_constants);
                 let chunk = chunk::Chunk {
                     bytecode,
                     constants,
@@ -275,7 +267,7 @@ mod tests {
                 let printed_values = Rc::new(RefCell::new(vec![]));
                 let printed_values_2 = printed_values.clone();
                 let mut string_interner: Interner = Default::default();
-                let want = $constants_preprocesser(&mut string_interner, $want);
+                let want = $constants_preprocessor(&mut string_interner, $want);
                 let mut vm = VM {
                     print_fn: Box::new(move |v| {
                         printed_values_2.as_ref().borrow_mut().push(v);
@@ -378,6 +370,6 @@ mod tests {
         vec![Op::Constant(0), Op::Constant(1), Op::Add, Op::Print],
         vec!["hello", "world"],
         vec!["helloworld"],
-        string_constants_preprocesser
+        string_constants_preprocessor
     );
 }

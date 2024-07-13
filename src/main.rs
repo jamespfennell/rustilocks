@@ -65,7 +65,7 @@ fn main() {
                 }
                 Some(output) => output,
             };
-            std::fs::write(&output, chunk.serialize()).unwrap();
+            std::fs::write(output, chunk.serialize()).unwrap();
         }
         Command::Disassemble { input } => {
             let chunk = match InputFile::read(&input) {
@@ -117,7 +117,7 @@ enum InputFile {
 
 impl InputFile {
     fn read(path: &PathBuf) -> InputFile {
-        match path.extension().map_or(None, |e| e.to_str()) {
+        match path.extension().and_then(|e| e.to_str()) {
             Some("lox") => InputFile::Lox(std::fs::read_to_string(path).unwrap()),
             Some("loxa") => InputFile::Assembly(std::fs::read_to_string(path).unwrap()),
             Some("rlks") => InputFile::Binary(std::fs::read(path).unwrap()),
