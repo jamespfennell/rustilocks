@@ -19,14 +19,20 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Compile a Lox program to a Rustilocks .rlks binary file.
+    /// Compile a Lox program to a Rustilocks .rlks bytecode file.
     Compile {
         /// File to compile.
         //
         /// This can be a Lox source file or Lox assembly file.
         input: PathBuf,
-        /// Output path. If not set, this will be the input path with a .rlks file extension.
+        /// Output path.
+        ///
+        /// If not set and compiling to bytecode, this will be the input path with a .rlks file extension.
+        /// If not set and compiling to assembly, the output will be printed to stdout.
         output: Option<PathBuf>,
+        /// Compile to a Lox assembly (.loxa) instead of bytecode.
+        #[clap(long, action)]
+        assembly: bool,
     },
     /// Disassemble a Rustilocks .rlks binary file.
     Disassemble {
@@ -45,27 +51,42 @@ enum Command {
         /// Lox source file to parse.
         input: PathBuf,
     },
-    // Assemble, Disassemble
 }
 
 fn main() {
     let cli = Cli::parse();
     match cli.command {
-        Command::Compile { input, output } => {
+        Command::Compile {
+            input,
+            output,
+            assembly,
+        } => {
             let chunk = match InputFile::read(&input) {
                 InputFile::Lox(src) => compiler::compile(&src).unwrap(),
                 InputFile::Assembly(src) => chunk::Chunk::deserialize_from_assembly(&src),
                 InputFile::Binary(_) => panic!("can't compile .rlks files"),
             };
-            let output = match output {
-                None => {
-                    let mut output = input.clone();
-                    output.set_extension("rlks");
-                    output
+            if assembly {
+                let out = chunk.serialize_to_assembly().unwrap();
+                match output {
+                    None => {
+                        print!("{out}");
+                    }
+                    Some(output) => {
+                        std::fs::write(output, out).unwrap();
+                    }
                 }
-                Some(output) => output,
-            };
-            std::fs::write(output, chunk.serialize()).unwrap();
+            } else {
+                let output = match output {
+                    None => {
+                        let mut output = input.clone();
+                        output.set_extension("rlks");
+                        output
+                    }
+                    Some(output) => output,
+                };
+                std::fs::write(output, chunk.serialize()).unwrap();
+            }
         }
         Command::Disassemble { input } => {
             let chunk = match InputFile::read(&input) {
