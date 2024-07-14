@@ -133,6 +133,11 @@ impl<'a> Compiler<'a> {
         token: Token<'a>,
         constant: Value,
     ) -> Result<u8, Box<CompilationError<'a>>> {
+        for (i, existing_constant) in self.chunk.constants.iter().enumerate() {
+            if constant == *existing_constant {
+                return Ok(i.try_into().expect("there are only 256 constants"));
+            }
+        }
         let i = self.chunk.constants.len();
         self.chunk.constants.push(constant);
         match i.try_into() {
