@@ -2,12 +2,15 @@ use crate::chunk;
 use crate::chunk::Op;
 use crate::error::*;
 use crate::scanner::{self, Token, TokenType};
+use crate::value::loxstring::LoxString;
 use crate::value::Value;
 
 pub fn compile(src: &str) -> Result<chunk::Chunk, Box<CompilationError>> {
     let mut compiler = Compiler {
         scanner: scanner::Scanner::new(src),
         chunk: chunk::Chunk::new(),
+        locals: vec![],
+        scope_depth: 0,
     };
     while compiler.scanner.peek()?.is_some() {
         compiler.declaration()?;
@@ -19,6 +22,14 @@ pub fn compile(src: &str) -> Result<chunk::Chunk, Box<CompilationError>> {
 struct Compiler<'a> {
     scanner: scanner::Scanner<'a>,
     chunk: chunk::Chunk,
+    locals: Vec<Local>,
+    scope_depth: usize,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Local {
+    name: LoxString,
+    depth: usize,
 }
 
 impl<'a> Compiler<'a> {
@@ -34,9 +45,9 @@ impl<'a> Compiler<'a> {
         match next.token_type {
             TokenType::Var => {
                 self.scanner.consume()?;
-                let name = consume_specific_token(&mut self.scanner, TokenType::Identifier)?;
-                let value = Value::String(self.chunk.string_interner.intern_ref(name.source));
-                let constant_i = self.add_constant(name, value)?;
+                let name_token = consume_specific_token(&mut self.scanner, TokenType::Identifier)?;
+                let name = self.chunk.string_interner.intern_ref(name_token.source);
+
                 match self.scanner.peek()? {
                     Some(Token {
                         token_type: TokenType::Equal,
@@ -48,7 +59,28 @@ impl<'a> Compiler<'a> {
                     _ => self.emit_op(Op::Nil),
                 };
                 consume_specific_token(&mut self.scanner, TokenType::Semicolon)?;
-                self.emit_op(Op::DefineGlobal(constant_i));
+                if self.scope_depth == 0 {
+                    // Global var declarations
+                    let constant_i = self.add_constant(name_token, Value::String(name))?;
+                    self.emit_op(Op::DefineGlobal(constant_i));
+                } else {
+                    // Local var declarations
+                    for local in self.locals.iter().rev() {
+                        if local.depth < self.scope_depth {
+                            break;
+                        }
+                        if local.name == name {
+                            return Err(Box::new(CompilationError::LocalRedeclared(next)));
+                        }
+                    }
+                    if self.locals.len() == 256 {
+                        return Err(Box::new(CompilationError::TooManyLocals(next)));
+                    }
+                    self.locals.push(Local {
+                        name,
+                        depth: self.scope_depth,
+                    });
+                }
                 Ok(())
             }
             _ => self.statement(),
@@ -66,16 +98,47 @@ impl<'a> Compiler<'a> {
                 self.expression()?;
                 consume_specific_token(&mut self.scanner, TokenType::Semicolon)?;
                 self.emit_op(Op::Print);
-                Ok(())
+            }
+            TokenType::LeftBrace => {
+                self.scope_depth += 1;
+                self.scanner.consume()?;
+                self.block(next)?;
+                while let Some(local) = self.locals.last().copied() {
+                    if local.depth < self.scope_depth {
+                        break;
+                    }
+                    self.emit_op(Op::Pop);
+                    self.locals.pop();
+                }
+                self.scope_depth -= 1;
             }
             // Expression statement
             _ => {
                 self.expression()?;
                 consume_specific_token(&mut self.scanner, TokenType::Semicolon)?;
                 self.emit_op(Op::Pop);
-                Ok(())
             }
         }
+        Ok(())
+    }
+
+    fn block(&mut self, opening_token: Token<'a>) -> Result<(), Box<CompilationError<'a>>> {
+        loop {
+            match self.scanner.peek()? {
+                None => return Err(Box::new(CompilationError::UnclosedBlock(opening_token))),
+                Some(Token {
+                    token_type: TokenType::RightBrace,
+                    source: _,
+                }) => {
+                    self.scanner.consume()?;
+                    break;
+                }
+                _ => {
+                    self.declaration()?;
+                }
+            }
+        }
+        Ok(())
     }
 
     fn parse_precendence(
@@ -355,13 +418,29 @@ fn prefix_variable<'a>(
     token: Token<'a>,
     can_assign: bool,
 ) -> Result<(), Box<CompilationError<'a>>> {
-    let name = Value::String(c.chunk.string_interner.intern_ref(token.source));
-    let i = c.add_constant(token, name)?;
+    let name = c.chunk.string_interner.intern_ref(token.source);
+
+    let mut local_index: Option<u8> = None;
+    for (i, local) in c.locals.iter().enumerate().rev() {
+        if local.name == name {
+            local_index = Some(i.try_into().expect("no more than 256 locals"));
+            break;
+        }
+    }
+    let (get_op, set_op) = match local_index {
+        // Global variable: the arg is the index in the constants table.
+        None => {
+            let i = c.add_constant(token, Value::String(name))?;
+            (Op::GetGlobal(i), Op::SetGlobal(i))
+        }
+        // Local variable: the arg is the position on the stack.
+        Some(i) => (Op::GetLocal(i), Op::SetLocal(i)),
+    };
     if can_assign && match_token_type(&mut c.scanner, TokenType::Equal)?.is_some() {
         c.expression()?;
-        c.emit_op(Op::SetGlobal(i));
+        c.emit_op(set_op);
     } else {
-        c.emit_op(Op::GetGlobal(i));
+        c.emit_op(get_op);
     };
     Ok(())
 }
@@ -381,238 +460,286 @@ fn match_token_type<'a>(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use crate::value::loxstring::Interner;
 
-    use super::*;
-
-    fn no_op_constants_preprocesser(_: &mut Interner, v: Vec<Value>) -> Vec<Value> {
-        v
+    trait Constant {
+        fn into_value(self, _: &mut Interner) -> Value;
     }
-
-    fn string_constants_preprocesser(string_interner: &mut Interner, v: Vec<&str>) -> Vec<Value> {
-        let mut out = vec![];
-        for s in v {
-            out.push(Value::String(string_interner.intern_ref(s)));
+    impl Constant for f64 {
+        fn into_value(self, _: &mut Interner) -> Value {
+            Value::Number(self)
         }
-        out
+    }
+    impl Constant for &'static str {
+        fn into_value(self, interner: &mut Interner) -> Value {
+            Value::String(interner.intern_ref(self))
+        }
     }
 
-    macro_rules! compiler_test {
-        ($name: ident, $input: expr, $want_ops: expr, $want_constants: expr) => {
-            compiler_test!(
-                $name,
-                $input,
-                $want_ops,
-                $want_constants,
-                no_op_constants_preprocesser
-            );
-        };
-        ($name: ident, $input: expr, $want_ops: expr, $want_constants: expr, $constants_preprocesser: ident) => {
+    macro_rules! compiler_tests {
+        (
+            $(
+                (
+                    $name: ident,
+                    $input: expr,
+                    $want_ops: expr,
+                    [ $( $want_constant: expr ),* $(,)? ] $(,)?
+                ),
+            )+
+        )   => {
+        $(
             #[test]
             fn $name() {
                 let mut want_ops = $want_ops;
                 want_ops.push(Op::Return);
 
-                let mut input: String = $input.into();
-                input.push(';');
+                let input: String = $input.into();
                 let mut chunk = compile(&input).unwrap();
+
+                let want_constants: Vec<Value> = vec![
+                    $(
+                        Constant::into_value( $want_constant, &mut chunk.string_interner),
+                    )*
+                ];
 
                 assert_eq!(
                     chunk.constants,
-                    $constants_preprocesser(&mut chunk.string_interner, $want_constants)
+                    want_constants,
                 );
 
                 let got_ops = chunk.convert_bytecode_to_ops().unwrap();
                 assert_eq!(got_ops, want_ops);
             }
+          )+
         };
     }
 
-    compiler_test!(
-        prefix_minus,
-        "-123",
-        vec![Op::Constant(0), Op::Negate, Op::Pop],
-        vec![Value::Number(123.0)]
-    );
-    compiler_test!(
-        infix_minus,
-        "1-2",
-        vec![Op::Constant(0), Op::Constant(1), Op::Subtract, Op::Pop],
-        vec![Value::Number(1.0), Value::Number(2.0)]
-    );
-    compiler_test!(
-        infix_plus,
-        "1+2",
-        vec![Op::Constant(0), Op::Constant(1), Op::Add, Op::Pop],
-        vec![Value::Number(1.0), Value::Number(2.0)]
-    );
-    compiler_test!(
-        infix_slash,
-        "1/2",
-        vec![Op::Constant(0), Op::Constant(1), Op::Divide, Op::Pop],
-        vec![Value::Number(1.0), Value::Number(2.0)]
-    );
-    compiler_test!(
-        infix_star,
-        "1*2",
-        vec![Op::Constant(0), Op::Constant(1), Op::Multiply, Op::Pop],
-        vec![Value::Number(1.0), Value::Number(2.0)]
-    );
-    compiler_test!(
-        addition_and_multiplication_1,
-        "1*2+3",
-        vec![
-            Op::Constant(0),
-            Op::Constant(1),
-            Op::Multiply,
-            Op::Constant(2),
-            Op::Add,
-            Op::Pop
-        ],
-        vec![Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]
-    );
-    compiler_test!(
-        addition_and_multiplication_2,
-        "1+2*3",
-        vec![
-            Op::Constant(0),
-            Op::Constant(1),
-            Op::Constant(2),
-            Op::Multiply,
-            Op::Add,
-            Op::Pop
-        ],
-        vec![Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]
-    );
-    compiler_test!(
-        negation_and_multiplication,
-        "1*-2",
-        vec![
-            Op::Constant(0),
-            Op::Constant(1),
-            Op::Negate,
-            Op::Multiply,
-            Op::Pop
-        ],
-        vec![Value::Number(1.0), Value::Number(2.0)]
-    );
-    compiler_test!(
-        grouping_1,
-        "1*(2+3)",
-        vec![
-            Op::Constant(0),
-            Op::Constant(1),
-            Op::Constant(2),
-            Op::Add,
-            Op::Multiply,
-            Op::Pop
-        ],
-        vec![Value::Number(1.0), Value::Number(2.0), Value::Number(3.0)]
-    );
-    compiler_test!(prefix_true, "true", vec![Op::True, Op::Pop], vec![]);
-    compiler_test!(prefix_false, "false", vec![Op::False, Op::Pop], vec![]);
-    compiler_test!(prefix_nil, "nil", vec![Op::Nil, Op::Pop], vec![]);
-    compiler_test!(boolean, "!true", vec![Op::True, Op::Not, Op::Pop], vec![]);
-    compiler_test!(
-        prefix_bang_equal,
-        "1!=2",
-        vec![
-            Op::Constant(0),
-            Op::Constant(1),
-            Op::Equal,
-            Op::Not,
-            Op::Pop
-        ],
-        vec![Value::Number(1.0), Value::Number(2.0)]
-    );
-    compiler_test!(
-        prefix_equal_equal,
-        "1==2",
-        vec![Op::Constant(0), Op::Constant(1), Op::Equal, Op::Pop],
-        vec![Value::Number(1.0), Value::Number(2.0)]
-    );
-    compiler_test!(
-        prefix_less_equal,
-        "1<=2",
-        vec![
-            Op::Constant(0),
-            Op::Constant(1),
-            Op::Greater,
-            Op::Not,
-            Op::Pop
-        ],
-        vec![Value::Number(1.0), Value::Number(2.0)]
-    );
-    compiler_test!(
-        prefix_less,
-        "1<2",
-        vec![Op::Constant(0), Op::Constant(1), Op::Less, Op::Pop],
-        vec![Value::Number(1.0), Value::Number(2.0)]
-    );
-    compiler_test!(
-        prefix_greater_equal,
-        "1>=2",
-        vec![Op::Constant(0), Op::Constant(1), Op::Less, Op::Not, Op::Pop],
-        vec![Value::Number(1.0), Value::Number(2.0)]
-    );
-
-    compiler_test!(
-        prefix_greater,
-        "1>2",
-        vec![Op::Constant(0), Op::Constant(1), Op::Greater, Op::Pop],
-        vec![Value::Number(1.0), Value::Number(2.0)]
-    );
-    compiler_test!(
-        less_than_inequality,
-        "-2>1",
-        vec![
-            Op::Constant(0),
-            Op::Negate,
-            Op::Constant(1),
-            Op::Greater,
-            Op::Pop
-        ],
-        vec![Value::Number(2.0), Value::Number(1.0)]
-    );
-    compiler_test!(
-        bang_comparison,
-        "! true == false",
-        vec![Op::True, Op::Not, Op::False, Op::Equal, Op::Pop],
-        vec![]
-    );
-    compiler_test!(
-        prefix_string,
-        "\"hello\" + \"world\"",
-        vec![Op::Constant(0), Op::Constant(1), Op::Add, Op::Pop],
-        vec!["hello", "world"],
-        string_constants_preprocesser
-    );
-    compiler_test!(
-        new_variable,
-        "var hello = \"world\"",
-        vec![Op::Constant(1), Op::DefineGlobal(0)],
-        vec!["hello", "world"],
-        string_constants_preprocesser
-    );
-    compiler_test!(
-        new_nil_variable,
-        "var hello",
-        vec![Op::Nil, Op::DefineGlobal(0)],
-        vec!["hello"],
-        string_constants_preprocesser
-    );
-    compiler_test!(
-        get_variable,
-        "hello + world",
-        vec![Op::GetGlobal(0), Op::GetGlobal(1), Op::Add, Op::Pop],
-        vec!["hello", "world"],
-        string_constants_preprocesser
-    );
-    compiler_test!(
-        overwrite_variable,
-        "hello = \"world\"",
-        vec![Op::Constant(1), Op::SetGlobal(0), Op::Pop],
-        vec!["hello", "world"],
-        string_constants_preprocesser
+    compiler_tests!(
+        (
+            prefix_minus,
+            "-123;",
+            vec![Op::Constant(0), Op::Negate, Op::Pop],
+            [123.0],
+        ),
+        (
+            infix_minus,
+            "1-2;",
+            vec![Op::Constant(0), Op::Constant(1), Op::Subtract, Op::Pop],
+            [1.0, 2.0],
+        ),
+        (
+            infix_plus,
+            "1+2;",
+            vec![Op::Constant(0), Op::Constant(1), Op::Add, Op::Pop],
+            [1.0, 2.0],
+        ),
+        (
+            infix_slash,
+            "1/2;",
+            vec![Op::Constant(0), Op::Constant(1), Op::Divide, Op::Pop],
+            [1.0, 2.0],
+        ),
+        (
+            infix_star,
+            "1*2;",
+            vec![Op::Constant(0), Op::Constant(1), Op::Multiply, Op::Pop],
+            [1.0, 2.0],
+        ),
+        (
+            addition_and_multiplication_1,
+            "1*2+3;",
+            vec![
+                Op::Constant(0),
+                Op::Constant(1),
+                Op::Multiply,
+                Op::Constant(2),
+                Op::Add,
+                Op::Pop
+            ],
+            [1.0, 2.0, 3.0],
+        ),
+        (
+            addition_and_multiplication_2,
+            "1+2*3;",
+            vec![
+                Op::Constant(0),
+                Op::Constant(1),
+                Op::Constant(2),
+                Op::Multiply,
+                Op::Add,
+                Op::Pop
+            ],
+            [1.0, 2.0, 3.0],
+        ),
+        (
+            negation_and_multiplication,
+            "1*-2;",
+            vec![
+                Op::Constant(0),
+                Op::Constant(1),
+                Op::Negate,
+                Op::Multiply,
+                Op::Pop
+            ],
+            [1.0, 2.0],
+        ),
+        (
+            grouping_1,
+            "1*(2+3);",
+            vec![
+                Op::Constant(0),
+                Op::Constant(1),
+                Op::Constant(2),
+                Op::Add,
+                Op::Multiply,
+                Op::Pop
+            ],
+            [1.0, 2.0, 3.0],
+        ),
+        (prefix_true, "true;", vec![Op::True, Op::Pop], []),
+        (prefix_false, "false;", vec![Op::False, Op::Pop], []),
+        (prefix_nil, "nil;", vec![Op::Nil, Op::Pop], []),
+        (boolean, "!true;", vec![Op::True, Op::Not, Op::Pop], []),
+        (
+            prefix_bang_equal,
+            "1!=2;",
+            vec![
+                Op::Constant(0),
+                Op::Constant(1),
+                Op::Equal,
+                Op::Not,
+                Op::Pop
+            ],
+            [1.0, 2.0],
+        ),
+        (
+            prefix_equal_equal,
+            "1==2;",
+            vec![Op::Constant(0), Op::Constant(1), Op::Equal, Op::Pop],
+            [1.0, 2.0],
+        ),
+        (
+            prefix_less_equal,
+            "1<=2;",
+            vec![
+                Op::Constant(0),
+                Op::Constant(1),
+                Op::Greater,
+                Op::Not,
+                Op::Pop
+            ],
+            [1.0, 2.0],
+        ),
+        (
+            prefix_less,
+            "1<2;",
+            vec![Op::Constant(0), Op::Constant(1), Op::Less, Op::Pop],
+            [1.0, 2.0],
+        ),
+        (
+            prefix_greater_equal,
+            "1>=2;",
+            vec![Op::Constant(0), Op::Constant(1), Op::Less, Op::Not, Op::Pop],
+            [1.0, 2.0],
+        ),
+        (
+            prefix_greater,
+            "1>2;",
+            vec![Op::Constant(0), Op::Constant(1), Op::Greater, Op::Pop],
+            [1.0, 2.0],
+        ),
+        (
+            less_than_inequality,
+            "-2>1;",
+            vec![
+                Op::Constant(0),
+                Op::Negate,
+                Op::Constant(1),
+                Op::Greater,
+                Op::Pop
+            ],
+            [2.0, 1.0],
+        ),
+        (
+            bang_comparison,
+            "! true == false;",
+            vec![Op::True, Op::Not, Op::False, Op::Equal, Op::Pop],
+            []
+        ),
+        (
+            prefix_string,
+            "\"hello\" + \"world\";",
+            vec![Op::Constant(0), Op::Constant(1), Op::Add, Op::Pop],
+            ["hello", "world"],
+        ),
+        (
+            global_var_bool,
+            "var hello = false;",
+            vec![Op::False, Op::DefineGlobal(0)],
+            ["hello"],
+        ),
+        (
+            global_var_number,
+            "var hello = 6;",
+            vec![Op::Constant(0), Op::DefineGlobal(1)],
+            [6.0, "hello"],
+        ),
+        (
+            global_var_string,
+            "var hello = \"world\"; var hola = \"world\";",
+            vec![
+                Op::Constant(0),
+                Op::DefineGlobal(1),
+                Op::Constant(0),
+                Op::DefineGlobal(2)
+            ],
+            ["world", "hello", "hola"],
+        ),
+        (
+            new_nil_variable,
+            "var hello;",
+            vec![Op::Nil, Op::DefineGlobal(0)],
+            ["hello"],
+        ),
+        (
+            get_variable,
+            "hello + world;",
+            vec![Op::GetGlobal(0), Op::GetGlobal(1), Op::Add, Op::Pop],
+            ["hello", "world"],
+        ),
+        (
+            overwrite_variable,
+            "hello = \"world\";",
+            vec![Op::Constant(1), Op::SetGlobal(0), Op::Pop],
+            ["hello", "world"],
+        ),
+        (
+            local_var_number,
+            "{ var local = 7; }",
+            vec![Op::Constant(0), Op::Pop],
+            [7.0],
+        ),
+        (
+            local_var_mulitple,
+            "{ var a = 1; var b = 2; var c = a + b; }",
+            vec![
+                Op::Constant(0),
+                Op::Constant(1),
+                Op::GetLocal(0),
+                Op::GetLocal(1),
+                Op::Add,
+                Op::Pop,
+                Op::Pop,
+                Op::Pop,
+            ],
+            [1.0, 2.0],
+        ),
+        (
+            local_var_same_nested,
+            "{ var a = \"outer\"; { var a = a; print a; } }",
+            vec![],
+            ["outer"],
+        ),
     );
 }

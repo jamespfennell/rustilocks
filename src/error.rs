@@ -64,6 +64,9 @@ pub enum CompilationError<'a> {
     MissingToken(&'static str),
     InvalidNumber(Token<'a>),
     InvalidAssignmentTarget(Token<'a>),
+    UnclosedBlock(Token<'a>),
+    TooManyLocals(Token<'a>),
+    LocalRedeclared(Token<'a>),
 }
 
 impl<'a> From<Box<ScannerError<'a>>> for Box<CompilationError<'a>> {

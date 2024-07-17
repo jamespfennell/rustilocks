@@ -35,7 +35,7 @@ impl Display for Value {
             Value::Number(d) => d.fmt(f),
             Value::Bool(b) => b.fmt(f),
             Value::Nil => "nil".fmt(f),
-            Value::String(s) => write!(f, "\"{s}\""),
+            Value::String(s) => write!(f, "{s}"),
         }
     }
 }
@@ -106,6 +106,7 @@ pub mod loxstring {
             if let Some(s) = self.strings.get(&s as &str) {
                 return LoxString(s);
             }
+            // TODO: have an interer that doesn't leak memory!
             let b = Box::leak(s.into_boxed_str());
             self.strings.insert(b);
             LoxString(b)

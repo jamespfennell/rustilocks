@@ -14,7 +14,9 @@ pub struct VM {
 impl Default for VM {
     fn default() -> Self {
         VM {
-            print_fn: Box::new(|v| println!("{}", v)),
+            print_fn: Box::new(|v| {
+              println!("{}", v);
+          }),
             string_interner: Default::default(),
             globals: Default::default(),
         }
@@ -126,6 +128,19 @@ impl VM {
                     // This handles the Lox code `a = (b = 3);`. In general, assignment is an
                     // expression which leaves the value on the stack.
                     value_stack.push(new_value);
+                }
+                Op::GetLocal(i) => {
+                    let value = value_stack
+                        .get(i as usize)
+                        .expect("local references valid index of stack");
+                    value_stack.push(*value);
+                }
+                Op::SetLocal(i) => {
+                    let value = pop_one(&mut value_stack, op)?;
+                    value_stack.push(value);
+                    *value_stack
+                        .get_mut(i as usize)
+                        .expect("local references valid index of stack") = value;
                 }
             }
             ip = new_ip;

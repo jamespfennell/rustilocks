@@ -97,6 +97,8 @@ pub enum Op {
     DefineGlobal(u8),
     GetGlobal(u8),
     SetGlobal(u8),
+    GetLocal(u8),
+    SetLocal(u8),
 }
 
 impl Op {
@@ -136,6 +138,8 @@ impl Op {
             16 => Op::DefineGlobal(read_one()?),
             17 => Op::GetGlobal(read_one()?),
             18 => Op::SetGlobal(read_one()?),
+            19 => Op::GetLocal(read_one()?),
+            20 => Op::SetLocal(read_one()?),
             _ => return Err(Box::new(InvalidBytecodeError::UnknownOpCode { op_code })),
         };
         Ok((op, tail))
@@ -144,7 +148,12 @@ impl Op {
     pub fn write(&self, buffer: &mut Vec<u8>) {
         buffer.push(self.op_code());
         match self {
-            Op::Constant(i) | Op::DefineGlobal(i) | Op::GetGlobal(i) | Op::SetGlobal(i) => {
+            Op::Constant(i)
+            | Op::DefineGlobal(i)
+            | Op::GetGlobal(i)
+            | Op::SetGlobal(i)
+            | Op::GetLocal(i)
+            | Op::SetLocal(i) => {
                 buffer.push(*i);
             }
             Op::Return
@@ -186,11 +195,16 @@ impl Op {
             Op::DefineGlobal(_) => "DEFINE_GLOBAL",
             Op::GetGlobal(_) => "GET_GLOBAL",
             Op::SetGlobal(_) => "SET_GLOBAL",
+            Op::GetLocal(_) => "GET_LOCAL",
+            Op::SetLocal(_) => "SET_LOCAL",
         };
         let tail = match self {
             Op::Constant(i) | Op::DefineGlobal(i) | Op::GetGlobal(i) | Op::SetGlobal(i) => {
                 let value = constants.get(*i as usize).unwrap();
                 format!("{value} % constants_index={i}")
+            }
+            Op::GetLocal(i) | Op::SetLocal(i) => {
+                format!("{i}")
             }
             _ => String::new(),
         };
@@ -236,6 +250,8 @@ impl Op {
             "DEFINE_GLOBAL" => Op::DefineGlobal(read_constant()),
             "GET_GLOBAL" => Op::GetGlobal(read_constant()),
             "SET_GLOBAL" => Op::SetGlobal(read_constant()),
+            "GET_LOCAL" => Op::GetLocal(read_constant()),
+            "SET_LOCAL" => Op::SetLocal(read_constant()),
             _ => panic!("unknown command {}", words[1]),
         };
         Some(op)
@@ -262,6 +278,8 @@ impl Op {
             Op::DefineGlobal(_) => 16,
             Op::GetGlobal(_) => 17,
             Op::SetGlobal(_) => 18,
+            Op::GetLocal(_) => 19,
+            Op::SetLocal(_) => 20,
         }
     }
 }
