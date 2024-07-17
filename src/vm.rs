@@ -15,8 +15,8 @@ impl Default for VM {
     fn default() -> Self {
         VM {
             print_fn: Box::new(|v| {
-              println!("{}", v);
-          }),
+                println!("{}", v);
+            }),
             string_interner: Default::default(),
             globals: Default::default(),
         }

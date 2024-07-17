@@ -419,7 +419,6 @@ fn prefix_variable<'a>(
     can_assign: bool,
 ) -> Result<(), Box<CompilationError<'a>>> {
     let name = c.chunk.string_interner.intern_ref(token.source);
-
     let mut local_index: Option<u8> = None;
     for (i, local) in c.locals.iter().enumerate().rev() {
         if local.name == name {
@@ -495,6 +494,7 @@ mod tests {
                 want_ops.push(Op::Return);
 
                 let input: String = $input.into();
+                #[allow(unused_mut)]
                 let mut chunk = compile(&input).unwrap();
 
                 let want_constants: Vec<Value> = vec![
@@ -738,7 +738,14 @@ mod tests {
         (
             local_var_same_nested,
             "{ var a = \"outer\"; { var a = a; print a; } }",
-            vec![],
+            vec![
+                Op::Constant(0),
+                Op::GetLocal(0),
+                Op::GetLocal(1),
+                Op::Print,
+                Op::Pop,
+                Op::Pop
+            ],
             ["outer"],
         ),
     );

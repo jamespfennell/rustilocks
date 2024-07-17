@@ -265,8 +265,9 @@ pub enum TokenType {
 mod tests {
     use super::*;
 
-    macro_rules! scanner_test {
-        ($name: ident, $input: expr, $output: expr) => {
+    macro_rules! scanner_tests {
+      ( $(  ($name: ident, $input: expr, $output: expr), )* ) => {
+        $(
             #[test]
             fn $name() {
                 let mut scanner = Scanner::new($input);
@@ -276,204 +277,205 @@ mod tests {
                 }
                 assert_eq!($output, got);
             }
+      )*
         };
     }
 
-    scanner_test!(left_paren, "(", vec![Token::new(TokenType::LeftParen, "(")]);
-    scanner_test!(
-        right_paren,
-        ")",
-        vec![Token::new(TokenType::RightParen, ")")]
-    );
-    scanner_test!(left_brace, "{", vec![Token::new(TokenType::LeftBrace, "{")]);
-    scanner_test!(
-        right_brace,
-        "}",
-        vec![Token::new(TokenType::RightBrace, "}")]
-    );
-    scanner_test!(semicolon, ";", vec![Token::new(TokenType::Semicolon, ";")]);
-    scanner_test!(comma, ",", vec![Token::new(TokenType::Comma, ",")]);
-    scanner_test!(dot, ".", vec![Token::new(TokenType::Dot, ".")]);
-    scanner_test!(minus, "-", vec![Token::new(TokenType::Minus, "-")]);
-    scanner_test!(plus, "+", vec![Token::new(TokenType::Plus, "+")]);
-    scanner_test!(slash, "/", vec![Token::new(TokenType::Slash, "/")]);
-    scanner_test!(star, "*", vec![Token::new(TokenType::Star, "*")]);
-    scanner_test!(bang, "!", vec![Token::new(TokenType::Bang, "!")]);
-    scanner_test!(
-        bang_bang,
-        "!!",
-        vec![
-            Token::new(TokenType::Bang, "!"),
-            Token::new(TokenType::Bang, "!")
-        ]
-    );
-    scanner_test!(
-        bang_equal,
-        "!=",
-        vec![Token::new(TokenType::BangEqual, "!=")]
-    );
-    scanner_test!(equal, "=", vec![Token::new(TokenType::Equal, "=")]);
-    scanner_test!(
-        equal_bang,
-        "=!",
-        vec![
-            Token::new(TokenType::Equal, "="),
-            Token::new(TokenType::Bang, "!")
-        ]
-    );
-    scanner_test!(
-        equal_equal,
-        "==",
-        vec![Token::new(TokenType::EqualEqual, "==")]
-    );
-    scanner_test!(less, "<", vec![Token::new(TokenType::Less, "<")]);
-    scanner_test!(
-        less_less,
-        "<<",
-        vec![
-            Token::new(TokenType::Less, "<"),
-            Token::new(TokenType::Less, "<")
-        ]
-    );
-    scanner_test!(
-        less_equal,
-        "<=",
-        vec![Token::new(TokenType::LessEqual, "<=")]
-    );
-    scanner_test!(greater, ">", vec![Token::new(TokenType::Greater, ">")]);
-    scanner_test!(
-        greater_greater,
-        ">>",
-        vec![
-            Token::new(TokenType::Greater, ">"),
-            Token::new(TokenType::Greater, ">")
-        ]
-    );
-    scanner_test!(
-        greater_equal,
-        ">=",
-        vec![Token::new(TokenType::GreaterEqual, ">=")]
-    );
-
-    scanner_test!(whilespace_1, " = ", vec![Token::new(TokenType::Equal, "=")]);
-    scanner_test!(
-        whilespace_2,
-        "\n = ",
-        vec![Token::new(TokenType::Equal, "=")]
-    );
-    scanner_test!(
-        whilespace_3,
-        "\t\n = ",
-        vec![Token::new(TokenType::Equal, "=")]
-    );
-
-    scanner_test!(
-        comment_1,
-        "// Hello, World\n=",
-        vec![Token::new(TokenType::Equal, "=")]
-    );
-    scanner_test!(
-        comment_2,
-        "// Hello,\n // World\n =",
-        vec![Token::new(TokenType::Equal, "=")]
-    );
-    scanner_test!(
-        comment_3,
-        "=// Hello World",
-        vec![Token::new(TokenType::Equal, "=")]
-    );
-    scanner_test!(
-        comment_4,
-        "/ /",
-        vec![
-            Token::new(TokenType::Slash, "/"),
-            Token::new(TokenType::Slash, "/")
-        ]
-    );
-    scanner_test!(
-        number_1,
-        "123=",
-        vec![
-            Token::new(TokenType::Number, "123"),
-            Token::new(TokenType::Equal, "="),
-        ]
-    );
-    scanner_test!(
-        number_2,
-        "123.4=",
-        vec![
-            Token::new(TokenType::Number, "123.4"),
-            Token::new(TokenType::Equal, "="),
-        ]
-    );
-    scanner_test!(
-        string_1,
-        "\"123\"4",
-        vec![
-            Token::new(TokenType::String, "\"123\""),
-            Token::new(TokenType::Number, "4"),
-        ]
-    );
-    scanner_test!(
-        string_2,
-        "\"höla\"",
-        vec![Token::new(TokenType::String, "\"höla\""),]
-    );
-    scanner_test!(
-        identifier_1,
-        "mint_mundo_1",
-        vec![Token::new(TokenType::Identifier, "mint_mundo_1")]
-    );
-    scanner_test!(keyword_and, "and", vec![Token::new(TokenType::And, "and")]);
-    scanner_test!(
-        keyword_class,
-        "class",
-        vec![Token::new(TokenType::Class, "class")]
-    );
-    scanner_test!(
-        keyword_else,
-        "else",
-        vec![Token::new(TokenType::Else, "else")]
-    );
-    scanner_test!(
-        keyword_false,
-        "false",
-        vec![Token::new(TokenType::False, "false")]
-    );
-    scanner_test!(keyword_for, "for", vec![Token::new(TokenType::For, "for")]);
-    scanner_test!(keyword_fun, "fun", vec![Token::new(TokenType::Fun, "fun")]);
-    scanner_test!(keyword_if, "if", vec![Token::new(TokenType::If, "if")]);
-    scanner_test!(keyword_nil, "nil", vec![Token::new(TokenType::Nil, "nil")]);
-    scanner_test!(keyword_or, "or", vec![Token::new(TokenType::Or, "or")]);
-    scanner_test!(
-        keyword_print,
-        "print",
-        vec![Token::new(TokenType::Print, "print")]
-    );
-    scanner_test!(
-        keyword_return,
-        "return",
-        vec![Token::new(TokenType::Return, "return")]
-    );
-    scanner_test!(
-        keyword_super,
-        "super",
-        vec![Token::new(TokenType::Super, "super")]
-    );
-    scanner_test!(
-        keyword_this,
-        "this",
-        vec![Token::new(TokenType::This, "this")]
-    );
-    scanner_test!(
-        keyword_true,
-        "true",
-        vec![Token::new(TokenType::True, "true")]
-    );
-    scanner_test!(keyword_var, "var", vec![Token::new(TokenType::Var, "var")]);
-    scanner_test!(
-        keyword_while,
-        "while",
-        vec![Token::new(TokenType::While, "while")]
+    scanner_tests!(
+        (left_paren, "(", vec![Token::new(TokenType::LeftParen, "(")]),
+        (
+            right_paren,
+            ")",
+            vec![Token::new(TokenType::RightParen, ")")]
+        ),
+        (left_brace, "{", vec![Token::new(TokenType::LeftBrace, "{")]),
+        (
+            right_brace,
+            "}",
+            vec![Token::new(TokenType::RightBrace, "}")]
+        ),
+        (semicolon, ";", vec![Token::new(TokenType::Semicolon, ";")]),
+        (comma, ",", vec![Token::new(TokenType::Comma, ",")]),
+        (dot, ".", vec![Token::new(TokenType::Dot, ".")]),
+        (minus, "-", vec![Token::new(TokenType::Minus, "-")]),
+        (plus, "+", vec![Token::new(TokenType::Plus, "+")]),
+        (slash, "/", vec![Token::new(TokenType::Slash, "/")]),
+        (star, "*", vec![Token::new(TokenType::Star, "*")]),
+        (bang, "!", vec![Token::new(TokenType::Bang, "!")]),
+        (
+            bang_bang,
+            "!!",
+            vec![
+                Token::new(TokenType::Bang, "!"),
+                Token::new(TokenType::Bang, "!")
+            ]
+        ),
+        (
+            bang_equal,
+            "!=",
+            vec![Token::new(TokenType::BangEqual, "!=")]
+        ),
+        (equal, "=", vec![Token::new(TokenType::Equal, "=")]),
+        (
+            equal_bang,
+            "=!",
+            vec![
+                Token::new(TokenType::Equal, "="),
+                Token::new(TokenType::Bang, "!")
+            ]
+        ),
+        (
+            equal_equal,
+            "==",
+            vec![Token::new(TokenType::EqualEqual, "==")]
+        ),
+        (less, "<", vec![Token::new(TokenType::Less, "<")]),
+        (
+            less_less,
+            "<<",
+            vec![
+                Token::new(TokenType::Less, "<"),
+                Token::new(TokenType::Less, "<")
+            ]
+        ),
+        (
+            less_equal,
+            "<=",
+            vec![Token::new(TokenType::LessEqual, "<=")]
+        ),
+        (greater, ">", vec![Token::new(TokenType::Greater, ">")]),
+        (
+            greater_greater,
+            ">>",
+            vec![
+                Token::new(TokenType::Greater, ">"),
+                Token::new(TokenType::Greater, ">")
+            ]
+        ),
+        (
+            greater_equal,
+            ">=",
+            vec![Token::new(TokenType::GreaterEqual, ">=")]
+        ),
+        (whilespace_1, " = ", vec![Token::new(TokenType::Equal, "=")]),
+        (
+            whilespace_2,
+            "\n = ",
+            vec![Token::new(TokenType::Equal, "=")]
+        ),
+        (
+            whilespace_3,
+            "\t\n = ",
+            vec![Token::new(TokenType::Equal, "=")]
+        ),
+        (
+            comment_1,
+            "// Hello, World\n=",
+            vec![Token::new(TokenType::Equal, "=")]
+        ),
+        (
+            comment_2,
+            "// Hello,\n // World\n =",
+            vec![Token::new(TokenType::Equal, "=")]
+        ),
+        (
+            comment_3,
+            "=// Hello World",
+            vec![Token::new(TokenType::Equal, "=")]
+        ),
+        (
+            comment_4,
+            "/ /",
+            vec![
+                Token::new(TokenType::Slash, "/"),
+                Token::new(TokenType::Slash, "/")
+            ]
+        ),
+        (
+            number_1,
+            "123=",
+            vec![
+                Token::new(TokenType::Number, "123"),
+                Token::new(TokenType::Equal, "="),
+            ]
+        ),
+        (
+            number_2,
+            "123.4=",
+            vec![
+                Token::new(TokenType::Number, "123.4"),
+                Token::new(TokenType::Equal, "="),
+            ]
+        ),
+        (
+            string_1,
+            "\"123\"4",
+            vec![
+                Token::new(TokenType::String, "\"123\""),
+                Token::new(TokenType::Number, "4"),
+            ]
+        ),
+        (
+            string_2,
+            "\"höla\"",
+            vec![Token::new(TokenType::String, "\"höla\""),]
+        ),
+        (
+            identifier_1,
+            "mint_mundo_1",
+            vec![Token::new(TokenType::Identifier, "mint_mundo_1")]
+        ),
+        (keyword_and, "and", vec![Token::new(TokenType::And, "and")]),
+        (
+            keyword_class,
+            "class",
+            vec![Token::new(TokenType::Class, "class")]
+        ),
+        (
+            keyword_else,
+            "else",
+            vec![Token::new(TokenType::Else, "else")]
+        ),
+        (
+            keyword_false,
+            "false",
+            vec![Token::new(TokenType::False, "false")]
+        ),
+        (keyword_for, "for", vec![Token::new(TokenType::For, "for")]),
+        (keyword_fun, "fun", vec![Token::new(TokenType::Fun, "fun")]),
+        (keyword_if, "if", vec![Token::new(TokenType::If, "if")]),
+        (keyword_nil, "nil", vec![Token::new(TokenType::Nil, "nil")]),
+        (keyword_or, "or", vec![Token::new(TokenType::Or, "or")]),
+        (
+            keyword_print,
+            "print",
+            vec![Token::new(TokenType::Print, "print")]
+        ),
+        (
+            keyword_return,
+            "return",
+            vec![Token::new(TokenType::Return, "return")]
+        ),
+        (
+            keyword_super,
+            "super",
+            vec![Token::new(TokenType::Super, "super")]
+        ),
+        (
+            keyword_this,
+            "this",
+            vec![Token::new(TokenType::This, "this")]
+        ),
+        (
+            keyword_true,
+            "true",
+            vec![Token::new(TokenType::True, "true")]
+        ),
+        (keyword_var, "var", vec![Token::new(TokenType::Var, "var")]),
+        (
+            keyword_while,
+            "while",
+            vec![Token::new(TokenType::While, "while")]
+        ),
     );
 }
