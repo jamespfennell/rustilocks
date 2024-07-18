@@ -4,12 +4,15 @@ WORKDIR /rustilocks
 COPY Cargo.toml .
 COPY Cargo.lock .
 RUN mkdir src
-RUN echo "fn main() {}" > src/main.rs
+RUN echo 'fn main() { println!["dummy binary"]; }' > src/main.rs
 RUN cargo fetch
+RUN cargo build --release
 COPY src src
+# We need to set the timestamp of main.rs so the compiler knows it's been updated
+RUN touch src/main.rs
 RUN cargo build --release
 
-FROM dart:2.17
+FROM dart:2
 
 WORKDIR /rustilocks
 COPY tests/craftinginterpreters/tool tool

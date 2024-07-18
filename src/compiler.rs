@@ -51,7 +51,7 @@ impl<'a> Compiler<'a> {
                 match self.scanner.peek()? {
                     Some(Token {
                         token_type: TokenType::Equal,
-                        source: _,
+                        ..
                     }) => {
                         self.scanner.consume()?;
                         self.expression()?
@@ -128,7 +128,7 @@ impl<'a> Compiler<'a> {
                 None => return Err(Box::new(CompilationError::UnclosedBlock(opening_token))),
                 Some(Token {
                     token_type: TokenType::RightBrace,
-                    source: _,
+                    ..
                 }) => {
                     self.scanner.consume()?;
                     break;
@@ -152,10 +152,7 @@ impl<'a> Compiler<'a> {
         let (prefix_rule, _, _) = get_rules(token.token_type);
         let prefix_rule = match prefix_rule {
             None => {
-                return Err(Box::new(CompilationError::UnexpectedToken(
-                    token,
-                    "expected a prefix token",
-                )))
+                return Err(Box::new(CompilationError::ExpectedExpression(token)));
             }
             Some(prefix_rule) => prefix_rule,
         };

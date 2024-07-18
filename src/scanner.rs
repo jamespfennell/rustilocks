@@ -2,6 +2,7 @@ use crate::error::ScannerError;
 
 pub struct Scanner<'a> {
     source: &'a str,
+    line_number: usize,
     cache: Option<Token<'a>>,
 }
 
@@ -9,6 +10,7 @@ impl<'a> Scanner<'a> {
     pub fn new(src: &'a str) -> Scanner<'a> {
         Scanner {
             source: src,
+            line_number: 1,
             cache: None,
         }
     }
@@ -33,7 +35,7 @@ impl<'a> Scanner<'a> {
     }
 
     fn scan(&mut self) -> Result<Option<Token<'a>>, Box<ScannerError<'a>>> {
-        self.source = skip_whitespace(self.source);
+        self.skip_whitespace();
         let mut chars = self.source.chars();
         let c = match chars.next() {
             None => return Ok(None),
@@ -84,7 +86,10 @@ impl<'a> Scanner<'a> {
                 loop {
                     match chars.next() {
                         None => {
-                            return Err(Box::new(ScannerError::UnterminatedString(self.source)))
+                            return Err(Box::new(ScannerError::UnterminatedString(
+                                self.line_number,
+                                self.source,
+                            )))
                         }
                         Some('"') => break,
                         Some(c) => {
@@ -133,35 +138,40 @@ impl<'a> Scanner<'a> {
         };
         let token_text = &self.source[..len];
         self.source = &self.source[len..];
-        Ok(Some(Token::new(token_type, token_text)))
+        Ok(Some(Token::new(token_type, self.line_number, token_text)))
     }
-}
 
-fn skip_whitespace(source: &str) -> &str {
-    let mut chars = source.chars();
-    let mut bytes_to_skip = 0;
-    while let Some(c) = chars.next() {
-        match c {
-            ' ' | '\r' | '\t' | '\n' => {
-                bytes_to_skip += 1;
-            }
-            '/' => {
-                if chars.next() == Some('/') {
-                    bytes_to_skip += 2;
-                    for c in chars.by_ref() {
-                        bytes_to_skip += c.len_utf8();
-                        if c == '\n' {
-                            break;
-                        }
-                    }
-                } else {
-                    break;
+    fn skip_whitespace(&mut self) {
+        let mut chars = self.source.chars();
+        let mut bytes_to_skip = 0;
+        while let Some(c) = chars.next() {
+            match c {
+                '\n' => {
+                    self.line_number += 1;
+                    bytes_to_skip += 1;
                 }
+                ' ' | '\r' | '\t' => {
+                    bytes_to_skip += 1;
+                }
+                '/' => {
+                    if chars.next() == Some('/') {
+                        bytes_to_skip += 2;
+                        for c in chars.by_ref() {
+                            bytes_to_skip += c.len_utf8();
+                            if c == '\n' {
+                                self.line_number += 1;
+                                break;
+                            }
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                _ => break,
             }
-            _ => break,
         }
+        self.source = &self.source[bytes_to_skip..];
     }
-    &source[bytes_to_skip..]
 }
 
 fn identifier_token_type(name: &str) -> TokenType {
@@ -203,12 +213,17 @@ fn identifier_token_type(name: &str) -> TokenType {
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 pub struct Token<'a> {
     pub token_type: TokenType,
+    pub line_number: usize,
     pub source: &'a str,
 }
 
 impl<'a> Token<'a> {
-    fn new(token_type: TokenType, source: &'a str) -> Token<'a> {
-        Token { token_type, source }
+    fn new(token_type: TokenType, line_number: usize, source: &'a str) -> Token<'a> {
+        Token {
+            token_type,
+            line_number,
+            source,
+        }
     }
 }
 
@@ -282,200 +297,246 @@ mod tests {
     }
 
     scanner_tests!(
-        (left_paren, "(", vec![Token::new(TokenType::LeftParen, "(")]),
+        (
+            left_paren,
+            "(",
+            vec![Token::new(TokenType::LeftParen, 1, "(")]
+        ),
         (
             right_paren,
             ")",
-            vec![Token::new(TokenType::RightParen, ")")]
+            vec![Token::new(TokenType::RightParen, 1, ")")]
         ),
-        (left_brace, "{", vec![Token::new(TokenType::LeftBrace, "{")]),
+        (
+            left_brace,
+            "{",
+            vec![Token::new(TokenType::LeftBrace, 1, "{")]
+        ),
         (
             right_brace,
             "}",
-            vec![Token::new(TokenType::RightBrace, "}")]
+            vec![Token::new(TokenType::RightBrace, 1, "}")]
         ),
-        (semicolon, ";", vec![Token::new(TokenType::Semicolon, ";")]),
-        (comma, ",", vec![Token::new(TokenType::Comma, ",")]),
-        (dot, ".", vec![Token::new(TokenType::Dot, ".")]),
-        (minus, "-", vec![Token::new(TokenType::Minus, "-")]),
-        (plus, "+", vec![Token::new(TokenType::Plus, "+")]),
-        (slash, "/", vec![Token::new(TokenType::Slash, "/")]),
-        (star, "*", vec![Token::new(TokenType::Star, "*")]),
-        (bang, "!", vec![Token::new(TokenType::Bang, "!")]),
+        (
+            semicolon,
+            ";",
+            vec![Token::new(TokenType::Semicolon, 1, ";")]
+        ),
+        (comma, ",", vec![Token::new(TokenType::Comma, 1, ",")]),
+        (dot, ".", vec![Token::new(TokenType::Dot, 1, ".")]),
+        (minus, "-", vec![Token::new(TokenType::Minus, 1, "-")]),
+        (plus, "+", vec![Token::new(TokenType::Plus, 1, "+")]),
+        (slash, "/", vec![Token::new(TokenType::Slash, 1, "/")]),
+        (star, "*", vec![Token::new(TokenType::Star, 1, "*")]),
+        (bang, "!", vec![Token::new(TokenType::Bang, 1, "!")]),
         (
             bang_bang,
             "!!",
             vec![
-                Token::new(TokenType::Bang, "!"),
-                Token::new(TokenType::Bang, "!")
+                Token::new(TokenType::Bang, 1, "!"),
+                Token::new(TokenType::Bang, 1, "!")
             ]
         ),
         (
             bang_equal,
             "!=",
-            vec![Token::new(TokenType::BangEqual, "!=")]
+            vec![Token::new(TokenType::BangEqual, 1, "!=")]
         ),
-        (equal, "=", vec![Token::new(TokenType::Equal, "=")]),
+        (equal, "=", vec![Token::new(TokenType::Equal, 1, "=")]),
         (
             equal_bang,
             "=!",
             vec![
-                Token::new(TokenType::Equal, "="),
-                Token::new(TokenType::Bang, "!")
+                Token::new(TokenType::Equal, 1, "="),
+                Token::new(TokenType::Bang, 1, "!")
             ]
         ),
         (
             equal_equal,
             "==",
-            vec![Token::new(TokenType::EqualEqual, "==")]
+            vec![Token::new(TokenType::EqualEqual, 1, "==")]
         ),
-        (less, "<", vec![Token::new(TokenType::Less, "<")]),
+        (less, "<", vec![Token::new(TokenType::Less, 1, "<")]),
         (
             less_less,
             "<<",
             vec![
-                Token::new(TokenType::Less, "<"),
-                Token::new(TokenType::Less, "<")
+                Token::new(TokenType::Less, 1, "<"),
+                Token::new(TokenType::Less, 1, "<")
             ]
         ),
         (
             less_equal,
             "<=",
-            vec![Token::new(TokenType::LessEqual, "<=")]
+            vec![Token::new(TokenType::LessEqual, 1, "<=")]
         ),
-        (greater, ">", vec![Token::new(TokenType::Greater, ">")]),
+        (greater, ">", vec![Token::new(TokenType::Greater, 1, ">")]),
         (
             greater_greater,
             ">>",
             vec![
-                Token::new(TokenType::Greater, ">"),
-                Token::new(TokenType::Greater, ">")
+                Token::new(TokenType::Greater, 1, ">"),
+                Token::new(TokenType::Greater, 1, ">")
             ]
         ),
         (
             greater_equal,
             ">=",
-            vec![Token::new(TokenType::GreaterEqual, ">=")]
+            vec![Token::new(TokenType::GreaterEqual, 1, ">=")]
         ),
-        (whilespace_1, " = ", vec![Token::new(TokenType::Equal, "=")]),
         (
-            whilespace_2,
+            whitespace_1,
+            " = ",
+            vec![Token::new(TokenType::Equal, 1, "=")]
+        ),
+        (
+            whitespace_2,
             "\n = ",
-            vec![Token::new(TokenType::Equal, "=")]
+            vec![Token::new(TokenType::Equal, 2, "=")]
         ),
         (
-            whilespace_3,
+            whitespace_3,
             "\t\n = ",
-            vec![Token::new(TokenType::Equal, "=")]
+            vec![Token::new(TokenType::Equal, 2, "=")]
         ),
         (
             comment_1,
             "// Hello, World\n=",
-            vec![Token::new(TokenType::Equal, "=")]
+            vec![Token::new(TokenType::Equal, 2, "=")]
         ),
         (
             comment_2,
             "// Hello,\n // World\n =",
-            vec![Token::new(TokenType::Equal, "=")]
+            vec![Token::new(TokenType::Equal, 3, "=")]
         ),
         (
             comment_3,
             "=// Hello World",
-            vec![Token::new(TokenType::Equal, "=")]
+            vec![Token::new(TokenType::Equal, 1, "=")]
         ),
         (
             comment_4,
             "/ /",
             vec![
-                Token::new(TokenType::Slash, "/"),
-                Token::new(TokenType::Slash, "/")
+                Token::new(TokenType::Slash, 1, "/"),
+                Token::new(TokenType::Slash, 1, "/")
             ]
         ),
         (
             number_1,
             "123=",
             vec![
-                Token::new(TokenType::Number, "123"),
-                Token::new(TokenType::Equal, "="),
+                Token::new(TokenType::Number, 1, "123"),
+                Token::new(TokenType::Equal, 1, "="),
             ]
         ),
         (
             number_2,
             "123.4=",
             vec![
-                Token::new(TokenType::Number, "123.4"),
-                Token::new(TokenType::Equal, "="),
+                Token::new(TokenType::Number, 1, "123.4"),
+                Token::new(TokenType::Equal, 1, "="),
             ]
         ),
         (
             string_1,
             "\"123\"4",
             vec![
-                Token::new(TokenType::String, "\"123\""),
-                Token::new(TokenType::Number, "4"),
+                Token::new(TokenType::String, 1, "\"123\""),
+                Token::new(TokenType::Number, 1, "4"),
             ]
         ),
         (
             string_2,
             "\"höla\"",
-            vec![Token::new(TokenType::String, "\"höla\""),]
+            vec![Token::new(TokenType::String, 1, "\"höla\""),]
         ),
         (
             identifier_1,
             "mint_mundo_1",
-            vec![Token::new(TokenType::Identifier, "mint_mundo_1")]
+            vec![Token::new(TokenType::Identifier, 1, "mint_mundo_1")]
         ),
-        (keyword_and, "and", vec![Token::new(TokenType::And, "and")]),
+        (
+            keyword_and,
+            "and",
+            vec![Token::new(TokenType::And, 1, "and")]
+        ),
         (
             keyword_class,
             "class",
-            vec![Token::new(TokenType::Class, "class")]
+            vec![Token::new(TokenType::Class, 1, "class")]
         ),
         (
             keyword_else,
             "else",
-            vec![Token::new(TokenType::Else, "else")]
+            vec![Token::new(TokenType::Else, 1, "else")]
         ),
         (
             keyword_false,
             "false",
-            vec![Token::new(TokenType::False, "false")]
+            vec![Token::new(TokenType::False, 1, "false")]
         ),
-        (keyword_for, "for", vec![Token::new(TokenType::For, "for")]),
-        (keyword_fun, "fun", vec![Token::new(TokenType::Fun, "fun")]),
-        (keyword_if, "if", vec![Token::new(TokenType::If, "if")]),
-        (keyword_nil, "nil", vec![Token::new(TokenType::Nil, "nil")]),
-        (keyword_or, "or", vec![Token::new(TokenType::Or, "or")]),
+        (
+            keyword_for,
+            "for",
+            vec![Token::new(TokenType::For, 1, "for")]
+        ),
+        (
+            keyword_fun,
+            "fun",
+            vec![Token::new(TokenType::Fun, 1, "fun")]
+        ),
+        (keyword_if, "if", vec![Token::new(TokenType::If, 1, "if")]),
+        (
+            keyword_nil,
+            "nil",
+            vec![Token::new(TokenType::Nil, 1, "nil")]
+        ),
+        (keyword_or, "or", vec![Token::new(TokenType::Or, 1, "or")]),
         (
             keyword_print,
             "print",
-            vec![Token::new(TokenType::Print, "print")]
+            vec![Token::new(TokenType::Print, 1, "print")]
         ),
         (
             keyword_return,
             "return",
-            vec![Token::new(TokenType::Return, "return")]
+            vec![Token::new(TokenType::Return, 1, "return")]
         ),
         (
             keyword_super,
             "super",
-            vec![Token::new(TokenType::Super, "super")]
+            vec![Token::new(TokenType::Super, 1, "super")]
         ),
         (
             keyword_this,
             "this",
-            vec![Token::new(TokenType::This, "this")]
+            vec![Token::new(TokenType::This, 1, "this")]
         ),
         (
             keyword_true,
             "true",
-            vec![Token::new(TokenType::True, "true")]
+            vec![Token::new(TokenType::True, 1, "true")]
         ),
-        (keyword_var, "var", vec![Token::new(TokenType::Var, "var")]),
+        (
+            keyword_var,
+            "var",
+            vec![Token::new(TokenType::Var, 1, "var")]
+        ),
         (
             keyword_while,
             "while",
-            vec![Token::new(TokenType::While, "while")]
+            vec![Token::new(TokenType::While, 1, "while")]
+        ),
+        (
+            line_number_1,
+            "\nfalse",
+            vec![Token::new(TokenType::False, 2, "false")]
+        ),
+        (
+            line_number_2,
+            "// comment\nfalse",
+            vec![Token::new(TokenType::False, 2, "false")]
         ),
     );
 }

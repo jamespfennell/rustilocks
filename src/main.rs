@@ -101,7 +101,7 @@ fn main() {
                 InputFile::Lox(src) => match compiler::compile(&src) {
                     Ok(chunk) => chunk,
                     Err(e) => {
-                        eprintln!("Error: {:?}", e);
+                        eprintln!("{e}");
                         // TODO: should copy clox's return exit codes
                         exit(65);
                     }
@@ -111,8 +111,8 @@ fn main() {
             };
             let mut vm = vm::VM::default();
             if let Err(e) = vm.run(&chunk) {
-                eprintln!("Error: {:?}", e);
-                // TODO: should copy clox's return exit codes
+                eprintln!("{e}\n[line 7] in script");
+                // TODO: should copy clox's return exit codes in all places
                 exit(70);
             }
         }
