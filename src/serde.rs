@@ -4,130 +4,163 @@ use crate::value::loxstring::Interner;
 use crate::value::Value;
 
 pub fn serialize_chunk(chunk: &chunk::Chunk) -> Vec<u8> {
-    let mut b = vec![];
-    serialize_bytes(&mut b, &chunk.bytecode);
-    let value_bytes = serialize_values(&chunk.constants, &chunk.string_interner);
-    serialize_bytes(&mut b, &value_bytes);
-    b
+    let mut buffer = vec![];
+    chunk
+        .bytecode
+        .serialize(&mut buffer, &chunk.string_interner);
+    chunk
+        .constants
+        .serialize(&mut buffer, &chunk.string_interner);
+    buffer
 }
 
 pub fn deserialize_chunk(b: &[u8]) -> Result<chunk::Chunk, String> {
-    let (bytecode, tail) = deserialize_bytes(b)?;
-    let (value_bytes, tail) = deserialize_bytes(tail)?;
-    if !tail.is_empty() {
-        return Err(format!("found {} trailing bytes", tail.len()));
-    }
+    let mut buffer = Buffer { b };
     let mut string_interner: Interner = Default::default();
-    let constants = deserialize_values(value_bytes, &mut string_interner)?;
+    let bytecode = Vec::<u8>::deserialize(&mut buffer, &mut string_interner)?;
+    let constants = Vec::<Value>::deserialize(&mut buffer, &mut string_interner)?;
+    if !buffer.b.is_empty() {
+        return Err(format!("found {} trailing bytes", buffer.b.len()));
+    }
     Ok(chunk::Chunk {
-        bytecode: bytecode.into(),
+        bytecode,
         constants,
         string_interner,
     })
 }
 
-fn serialize_bytes(target: &mut Vec<u8>, b: &[u8]) {
-    target.extend((b.len() as u64).to_be_bytes());
-    target.extend(b);
+struct Buffer<'a> {
+    b: &'a [u8],
+}
+impl<'a> Buffer<'a> {
+    fn take<const N: usize>(&mut self, type_name: &'static str) -> Result<[u8; N], String> {
+        if self.b.len() < N {
+            return Err(format!("expected a {N} byte value for {type_name}"));
+        }
+        let (head, tail) = self.b.split_at(N);
+        // Safety: from the split call, head is guaranteed to have 8 elements and the cast is infallible.
+        let head: [u8; N] = unsafe { head.try_into().unwrap_unchecked() };
+        self.b = tail;
+        Ok(head)
+    }
 }
 
-fn deserialize_bytes(mut b: &[u8]) -> Result<(&[u8], &[u8]), String> {
-    let (u_raw, tail) = match split_array::<8>(b) {
-        None => return Err("no 8 byte size value preceding byte slice".to_string()),
-        Some(t) => t,
-    };
-    b = tail;
-    let len: usize = match u64::from_be_bytes(u_raw).try_into() {
-        Ok(len) => len,
-        Err(_) => return Err("byte slice is to big for this architecture".to_string()),
-    };
-    let (head, tail) = match b.len() < len {
-        true => return Err("truncated byte slice".to_string()),
-        false => b.split_at(len),
-    };
-    Ok((head, tail))
+trait Serde: Sized {
+    fn serialize(&self, buffer: &mut Vec<u8>, interner: &loxstring::Interner);
+    fn deserialize(buffer: &mut Buffer, interner: &mut loxstring::Interner)
+        -> Result<Self, String>;
 }
 
-fn serialize_values(values: &[Value], interner: &loxstring::Interner) -> Vec<u8> {
-    let mut b = vec![];
-    for value in values {
-        match *value {
-            Value::Number(f) => {
-                b.push(0);
-                b.extend(f.to_be_bytes());
+macro_rules! numeric_serde_impl {
+    ( $( ($type_name: ident, $type_name_str: expr, $num_bytes: expr ), )+ ) => { $(
+        impl Serde for $type_name {
+            fn serialize(&self, buffer: &mut Vec<u8>, _: &loxstring::Interner) {
+                buffer.extend(self.to_be_bytes());
             }
-            Value::Bool(bool) => {
-                b.push(1);
-                if bool {
-                    b.push(0);
-                } else {
-                    b.push(1);
-                }
+            fn deserialize(buffer: &mut Buffer, _: &mut loxstring::Interner) -> Result<Self, String> {
+                Ok($type_name::from_be_bytes(buffer.take::<$num_bytes>($type_name_str)?))
+            }
+        }
+    )+ };
+}
+
+numeric_serde_impl!((f64, "f64", 8), (u64, "u64", 8), (u8, "u8", 1),);
+
+impl Serde for bool {
+    fn serialize(&self, buffer: &mut Vec<u8>, _: &loxstring::Interner) {
+        buffer.push(if *self { 0 } else { 1 })
+    }
+    fn deserialize(buffer: &mut Buffer, _: &mut loxstring::Interner) -> Result<Self, String> {
+        let [b] = buffer.take::<1>("bool")?;
+        match b {
+            0 => Ok(true),
+            1 => Ok(false),
+            _ => Err(format!("invalid value {b} for bool")),
+        }
+    }
+}
+
+impl<T: Serde> Serde for &[T] {
+    fn serialize(&self, buffer: &mut Vec<u8>, interner: &loxstring::Interner) {
+        (self.len() as u64).serialize(buffer, interner);
+        for elem in self.iter() {
+            elem.serialize(buffer, interner);
+        }
+    }
+    fn deserialize(_: &mut Buffer, _: &mut loxstring::Interner) -> Result<Self, String> {
+        unimplemented!()
+    }
+}
+
+impl<T: Serde> Serde for Vec<T> {
+    fn serialize(&self, buffer: &mut Vec<u8>, interner: &loxstring::Interner) {
+        self.as_slice().serialize(buffer, interner);
+    }
+    fn deserialize(
+        buffer: &mut Buffer,
+        interner: &mut loxstring::Interner,
+    ) -> Result<Self, String> {
+        let len = u64::deserialize(buffer, interner)? as usize;
+        let mut v = Vec::with_capacity(len);
+        for _ in 0..len {
+            v.push(T::deserialize(buffer, interner)?);
+        }
+        Ok(v)
+    }
+}
+
+impl Serde for loxstring::LoxString {
+    fn serialize(&self, buffer: &mut Vec<u8>, interner: &loxstring::Interner) {
+        self.as_str(interner).as_bytes().serialize(buffer, interner);
+    }
+    fn deserialize(
+        buffer: &mut Buffer,
+        interner: &mut loxstring::Interner,
+    ) -> Result<Self, String> {
+        let bytes = Vec::<u8>::deserialize(buffer, interner)?;
+        let s = match String::from_utf8(bytes) {
+            Ok(v) => v,
+            Err(e) => return Err(format!("invalid UTF-8 sequence: {}", e)),
+        };
+        Ok(interner.intern_owned(s))
+    }
+}
+
+impl Serde for Value {
+    fn serialize(&self, buffer: &mut Vec<u8>, interner: &loxstring::Interner) {
+        match self {
+            Value::Number(f) => {
+                buffer.push(0);
+                f.serialize(buffer, interner);
+            }
+            Value::Bool(b) => {
+                buffer.push(1);
+                b.serialize(buffer, interner);
             }
             Value::Nil => {
-                b.push(2);
+                buffer.push(2);
             }
-            Value::String(l) => {
-                b.push(3);
-                let s = l.as_str(interner);
-                serialize_bytes(&mut b, s.as_bytes());
+            Value::String(s) => {
+                buffer.push(3);
+                s.serialize(buffer, interner);
             }
         }
     }
-    b
-}
-
-fn deserialize_values(
-    mut b: &[u8],
-    interner: &mut loxstring::Interner,
-) -> Result<Vec<Value>, String> {
-    let mut values = vec![];
-    while let Some(([code], tail)) = split_array::<1>(b) {
-        b = tail;
-        let value = match code {
-            0 => {
-                let (f_raw, tail) = match split_array::<8>(b) {
-                    None => return Err("no 8 byte value following number code".to_string()),
-                    Some(t) => t,
-                };
-                b = tail;
-                Value::Number(f64::from_be_bytes(f_raw))
-            }
-            1 => {
-                let v = match b.first().copied() {
-                    None => return Err("no value following boolean code".to_string()),
-                    Some(0) => true,
-                    Some(1) => false,
-                    Some(i) => return Err(format!("unknown value {} for boolean", i)),
-                };
-                b = &b[1..];
-                Value::Bool(v)
-            }
-            2 => Value::Nil,
-            3 => {
-                let (s_raw, tail) = deserialize_bytes(b)?;
-                b = tail;
-                let s = match std::str::from_utf8(s_raw) {
-                    Ok(s) => s,
-                    Err(_) => return Err("non-ut8 string".to_string()),
-                };
-                Value::String(interner.intern_ref(s))
-            }
-            _ => return Err(format!("unknown value code {}", code)),
-        };
-        values.push(value);
+    fn deserialize(
+        buffer: &mut Buffer,
+        interner: &mut loxstring::Interner,
+    ) -> Result<Self, String> {
+        let [d] = buffer.take::<1>("Value")?;
+        match d {
+            0 => Ok(Value::Number(f64::deserialize(buffer, interner)?)),
+            1 => Ok(Value::Bool(bool::deserialize(buffer, interner)?)),
+            2 => Ok(Value::Nil),
+            3 => Ok(Value::String(loxstring::LoxString::deserialize(
+                buffer, interner,
+            )?)),
+            _ => Err(format!("invalid discriminant {d} for Value")),
+        }
     }
-    Ok(values)
-}
-
-fn split_array<const N: usize>(b: &[u8]) -> Option<([u8; N], &[u8])> {
-    if b.len() < N {
-        return None;
-    }
-    let (head, tail) = b.split_at(N);
-    // Safety: from the split call, head is guaranteed to have 8 elements and the cast is infallible.
-    let arr: [u8; N] = unsafe { head.try_into().unwrap_unchecked() };
-    Some((arr, tail))
 }
 
 #[cfg(test)]
@@ -165,9 +198,10 @@ mod tests {
             Value::Nil,
         ];
 
-        let b = serialize_values(&values, &interner);
-
-        let out = deserialize_values(&b, &mut interner).unwrap();
+        let mut b = vec![];
+        values.serialize(&mut b, &interner);
+        let mut buffer = Buffer { b: &b };
+        let out = Vec::<Value>::deserialize(&mut buffer, &mut interner).unwrap();
 
         assert_eq!(out, values);
     }
