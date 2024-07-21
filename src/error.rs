@@ -88,7 +88,8 @@ pub enum CompilationErrorKind<'a> {
     InvalidAssignmentTarget(&'a str),
     UnclosedBlock,
     TooManyLocals,
-    LocalRedeclared,
+    LocalRedeclared(&'a str),
+    LocalUninitialized(&'a str),
 }
 
 impl<'a> CompilationError<'a> {
@@ -99,9 +100,11 @@ impl<'a> CompilationError<'a> {
     pub fn at(&self) -> Option<&'a str> {
         use CompilationErrorKind::*;
         match self.kind {
-            ExpectedExpression(at) | InvalidAssignmentTarget(at) | ExpectedIdentifier(at) => {
-                Some(at)
-            }
+            ExpectedExpression(at)
+            | InvalidAssignmentTarget(at)
+            | ExpectedIdentifier(at)
+            | LocalRedeclared(at)
+            | LocalUninitialized(at) => Some(at),
             _ => None,
         }
     }
@@ -112,6 +115,8 @@ impl<'a> CompilationError<'a> {
             InvalidAssignmentTarget(_) => "Invalid assignment target.",
             UnterminatedString(..) => "Unterminated string.",
             ExpectedIdentifier(_) => "Expect variable name.",
+            LocalRedeclared(_) => "Already a variable with this name in this scope.",
+            LocalUninitialized(_) => "Can't read local variable in its own initializer.",
             _ => {
                 println!("{:?}", self);
                 "todo"

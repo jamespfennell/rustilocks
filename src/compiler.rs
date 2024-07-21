@@ -30,6 +30,7 @@ struct Compiler<'a> {
 struct Local {
     name: LoxString,
     depth: usize,
+    initialized: bool,
 }
 
 impl<'a> Compiler<'a> {
@@ -51,6 +52,38 @@ impl<'a> Compiler<'a> {
                     })?;
                 let name = self.chunk.string_interner.intern_ref(name_token.source);
 
+                let define_global_op = if self.scope_depth == 0 {
+                    // Global var declarations
+                    let constant_i = self.add_constant(name_token, Value::String(name))?;
+                    Some(Op::DefineGlobal(constant_i))
+                } else {
+                    // Local var declarations
+                    // First we check that this is not a redeclaration.
+                    for local in self.locals.iter().rev() {
+                        if local.depth < self.scope_depth {
+                            break;
+                        }
+                        if local.name == name {
+                            return Err(Box::new(CompilationError {
+                                line_number: self.scanner.line_number(),
+                                kind: CompilationErrorKind::LocalRedeclared(name_token.source),
+                            }));
+                        }
+                    }
+                    if self.locals.len() == 256 {
+                        return Err(Box::new(CompilationError {
+                            line_number: self.scanner.line_number(),
+                            kind: CompilationErrorKind::TooManyLocals,
+                        }));
+                    }
+                    self.locals.push(Local {
+                        name,
+                        depth: self.scope_depth,
+                        initialized: false,
+                    });
+                    None
+                };
+
                 match self.scanner.peek()? {
                     Some(Token {
                         token_type: TokenType::Equal,
@@ -64,34 +97,19 @@ impl<'a> Compiler<'a> {
                 consume_specific_token(&mut self.scanner, TokenType::Semicolon, |_at| {
                     CompilationErrorKind::Todo(1)
                 })?;
-                if self.scope_depth == 0 {
-                    // Global var declarations
-                    let constant_i = self.add_constant(name_token, Value::String(name))?;
-                    self.emit_op(Op::DefineGlobal(constant_i));
-                } else {
-                    // Local var declarations
-                    for local in self.locals.iter().rev() {
-                        if local.depth < self.scope_depth {
-                            break;
-                        }
-                        if local.name == name {
-                            return Err(Box::new(CompilationError {
-                                line_number: self.scanner.line_number(),
-                                kind: CompilationErrorKind::LocalRedeclared,
-                            }));
-                        }
+
+                match define_global_op {
+                    None => {
+                        self.locals
+                            .last_mut()
+                            .expect("the local being defined is on top of the locals stack")
+                            .initialized = true;
                     }
-                    if self.locals.len() == 256 {
-                        return Err(Box::new(CompilationError {
-                            line_number: self.scanner.line_number(),
-                            kind: CompilationErrorKind::TooManyLocals,
-                        }));
+                    Some(op) => {
+                        self.emit_op(op);
                     }
-                    self.locals.push(Local {
-                        name,
-                        depth: self.scope_depth,
-                    });
                 }
+
                 Ok(())
             }
             _ => self.statement(),
@@ -467,6 +485,13 @@ fn prefix_variable<'a>(
     let mut local_index: Option<u8> = None;
     for (i, local) in c.locals.iter().enumerate().rev() {
         if local.name == name {
+            // Check that the variable has not been declared
+            if !local.initialized {
+                return Err(Box::new(CompilationError {
+                    line_number: token.line_number,
+                    kind: CompilationErrorKind::LocalUninitialized(token.source),
+                }));
+            }
             local_index = Some(i.try_into().expect("no more than 256 locals"));
             break;
         }
@@ -727,19 +752,19 @@ mod tests {
         (
             global_var_number,
             "var hello = 6;",
-            vec![Op::Constant(0), Op::DefineGlobal(1)],
-            [6.0, "hello"],
+            vec![Op::Constant(1), Op::DefineGlobal(0)],
+            ["hello", 6.0],
         ),
         (
             global_var_string,
             "var hello = \"world\"; var hola = \"world\";",
             vec![
-                Op::Constant(0),
-                Op::DefineGlobal(1),
-                Op::Constant(0),
+                Op::Constant(1),
+                Op::DefineGlobal(0),
+                Op::Constant(1),
                 Op::DefineGlobal(2)
             ],
-            ["world", "hello", "hola"],
+            ["hello", "world", "hola"],
         ),
         (
             new_nil_variable,
@@ -779,19 +804,6 @@ mod tests {
                 Op::Pop,
             ],
             [1.0, 2.0],
-        ),
-        (
-            local_var_same_nested,
-            "{ var a = \"outer\"; { var a = a; print a; } }",
-            vec![
-                Op::Constant(0),
-                Op::GetLocal(0),
-                Op::GetLocal(1),
-                Op::Print,
-                Op::Pop,
-                Op::Pop
-            ],
-            ["outer"],
         ),
     );
 }
