@@ -3,21 +3,15 @@ use crate::serde;
 use crate::value::loxstring;
 use crate::value::Value;
 
-#[derive(Debug)]
+#[derive(Default, Debug)]
 pub struct Chunk {
     pub bytecode: Vec<u8>,
+    pub line_numbers: Vec<usize>,
     pub constants: Vec<Value>,
     pub string_interner: loxstring::Interner,
 }
 
 impl Chunk {
-    pub fn new() -> Chunk {
-        Chunk {
-            bytecode: vec![],
-            constants: vec![],
-            string_interner: Default::default(),
-        }
-    }
     pub fn serialize(&self) -> Vec<u8> {
         serde::serialize_chunk(self)
     }
@@ -29,26 +23,25 @@ impl Chunk {
     #[cfg(test)]
     pub fn convert_bytecode_to_ops(&self) -> Result<Vec<Op>, Box<InvalidBytecodeError>> {
         let mut ops = vec![];
-        let mut bytecode: &[u8] = &self.bytecode;
-        while !bytecode.is_empty() {
-            let (op, new_bytecode) = Op::read(&bytecode)?;
+        let mut offset = 0_usize;
+        while offset < self.bytecode.len() {
+            let (op, inc) = Op::read(&self.bytecode[offset..])?;
             ops.push(op);
-            bytecode = new_bytecode;
+            offset += inc as usize;
         }
         Ok(ops)
     }
 
     pub fn serialize_to_assembly(&self) -> Result<String, Box<InvalidBytecodeError>> {
-        let mut ip: &[u8] = &self.bytecode;
+        let mut offset = 0_usize;
         let mut result = String::new();
         result.push_str("%%%% bytecode %%%%\n");
-        while !ip.is_empty() {
-            let (op_code, new_ip) = Op::read(ip)?;
-            let new_line =
-                op_code.write_to_assembly(self.bytecode.len() - ip.len(), &self.constants);
+        while offset < self.bytecode.len() {
+            let (op_code, inc) = Op::read(&self.bytecode[offset..])?;
+            let new_line = op_code.write_to_assembly(offset, &self.constants);
             result.push_str(&new_line);
             result.push('\n');
-            ip = new_ip;
+            offset += inc as usize;
         }
         result.push_str("%%%% constants %%%%\n");
         for (i, value) in self.constants.iter().enumerate() {
@@ -70,6 +63,7 @@ impl Chunk {
         Chunk {
             bytecode,
             constants,
+            line_numbers: vec![], // todo
             string_interner: Default::default(),
         }
     }
@@ -102,47 +96,46 @@ pub enum Op {
 }
 
 impl Op {
-    /// Read reads the first op from the provided bytecode and returns the op
-    /// and a pointer to code after the op.
-    pub fn read(b: &[u8]) -> Result<(Op, &[u8]), Box<InvalidBytecodeError>> {
+    /// Read reads the first op from the provided bytecode and returns the
+    /// number of bytes that were consumed.
+    pub fn read(b: &[u8]) -> Result<(Op, u8), Box<InvalidBytecodeError>> {
         let (op_code, mut tail) = match b.split_first() {
             None => return Err(Box::new(InvalidBytecodeError::EmptyBytecode)),
             Some((i, tail)) => (*i, tail),
         };
         let mut read_one = || match tail.split_first() {
             None => Err(Box::new(InvalidBytecodeError::MissingOpArgument {
-                op: Op::Constant(0),
+                op_code,
             })),
             Some((i, new_tail)) => {
                 tail = new_tail;
                 Ok(*i)
             }
         };
-        let op = match op_code {
-            0 => Op::Return,
-            1 => Op::Constant(read_one()?),
-            2 => Op::Negate,
-            3 => Op::Add,
-            4 => Op::Subtract,
-            5 => Op::Multiply,
-            6 => Op::Divide,
-            7 => Op::True,
-            8 => Op::False,
-            9 => Op::Nil,
-            10 => Op::Not,
-            11 => Op::Equal,
-            12 => Op::Greater,
-            13 => Op::Less,
-            14 => Op::Print,
-            15 => Op::Pop,
-            16 => Op::DefineGlobal(read_one()?),
-            17 => Op::GetGlobal(read_one()?),
-            18 => Op::SetGlobal(read_one()?),
-            19 => Op::GetLocal(read_one()?),
-            20 => Op::SetLocal(read_one()?),
+        Ok(match op_code {
+            0 => (Op::Return, 1),
+            1 => (Op::Constant(read_one()?), 2),
+            2 => (Op::Negate, 1),
+            3 => (Op::Add, 1),
+            4 => (Op::Subtract, 1),
+            5 => (Op::Multiply, 1),
+            6 => (Op::Divide, 1),
+            7 => (Op::True, 1),
+            8 => (Op::False, 1),
+            9 => (Op::Nil, 1),
+            10 => (Op::Not, 1),
+            11 => (Op::Equal, 1),
+            12 => (Op::Greater, 1),
+            13 => (Op::Less, 1),
+            14 => (Op::Print, 1),
+            15 => (Op::Pop, 1),
+            16 => (Op::DefineGlobal(read_one()?), 2),
+            17 => (Op::GetGlobal(read_one()?), 2),
+            18 => (Op::SetGlobal(read_one()?), 2),
+            19 => (Op::GetLocal(read_one()?), 2),
+            20 => (Op::SetLocal(read_one()?), 2),
             _ => return Err(Box::new(InvalidBytecodeError::UnknownOpCode { op_code })),
-        };
-        Ok((op, tail))
+        })
     }
 
     pub fn write(&self, buffer: &mut Vec<u8>) {
@@ -300,7 +293,7 @@ mod tests {
                         op.write(&mut buffer);
                         let (out_op, tail) = Op::read(&buffer).unwrap();
                         assert_eq!(op, out_op);
-                        assert!(tail.is_empty());
+                        assert_eq!(tail as usize, buffer.len());
                     }
 
                     #[test]

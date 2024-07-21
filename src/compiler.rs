@@ -8,7 +8,7 @@ use crate::value::Value;
 pub fn compile(src: &str) -> Result<chunk::Chunk, Box<CompilationError>> {
     let mut compiler = Compiler {
         scanner: scanner::Scanner::new(src),
-        chunk: chunk::Chunk::new(),
+        chunk: Default::default(),
         locals: vec![],
         scope_depth: 0,
     };
@@ -45,7 +45,10 @@ impl<'a> Compiler<'a> {
         match next.token_type {
             TokenType::Var => {
                 self.scanner.consume()?;
-                let name_token = consume_specific_token(&mut self.scanner, TokenType::Identifier)?;
+                let name_token =
+                    consume_specific_token(&mut self.scanner, TokenType::Identifier, |at| {
+                        CompilationErrorKind::ExpectedIdentifier(at)
+                    })?;
                 let name = self.chunk.string_interner.intern_ref(name_token.source);
 
                 match self.scanner.peek()? {
@@ -58,7 +61,9 @@ impl<'a> Compiler<'a> {
                     }
                     _ => self.emit_op(Op::Nil),
                 };
-                consume_specific_token(&mut self.scanner, TokenType::Semicolon)?;
+                consume_specific_token(&mut self.scanner, TokenType::Semicolon, |_at| {
+                    CompilationErrorKind::Todo(1)
+                })?;
                 if self.scope_depth == 0 {
                     // Global var declarations
                     let constant_i = self.add_constant(name_token, Value::String(name))?;
@@ -70,11 +75,17 @@ impl<'a> Compiler<'a> {
                             break;
                         }
                         if local.name == name {
-                            return Err(Box::new(CompilationError::LocalRedeclared(next)));
+                            return Err(Box::new(CompilationError {
+                                line_number: self.scanner.line_number(),
+                                kind: CompilationErrorKind::LocalRedeclared,
+                            }));
                         }
                     }
                     if self.locals.len() == 256 {
-                        return Err(Box::new(CompilationError::TooManyLocals(next)));
+                        return Err(Box::new(CompilationError {
+                            line_number: self.scanner.line_number(),
+                            kind: CompilationErrorKind::TooManyLocals,
+                        }));
                     }
                     self.locals.push(Local {
                         name,
@@ -96,7 +107,9 @@ impl<'a> Compiler<'a> {
             TokenType::Print => {
                 self.scanner.consume()?;
                 self.expression()?;
-                consume_specific_token(&mut self.scanner, TokenType::Semicolon)?;
+                consume_specific_token(&mut self.scanner, TokenType::Semicolon, |_| {
+                    CompilationErrorKind::Todo(2)
+                })?;
                 self.emit_op(Op::Print);
             }
             TokenType::LeftBrace => {
@@ -115,7 +128,9 @@ impl<'a> Compiler<'a> {
             // Expression statement
             _ => {
                 self.expression()?;
-                consume_specific_token(&mut self.scanner, TokenType::Semicolon)?;
+                consume_specific_token(&mut self.scanner, TokenType::Semicolon, |_| {
+                    CompilationErrorKind::Todo(3)
+                })?;
                 self.emit_op(Op::Pop);
             }
         }
@@ -125,7 +140,12 @@ impl<'a> Compiler<'a> {
     fn block(&mut self, opening_token: Token<'a>) -> Result<(), Box<CompilationError<'a>>> {
         loop {
             match self.scanner.peek()? {
-                None => return Err(Box::new(CompilationError::UnclosedBlock(opening_token))),
+                None => {
+                    return Err(Box::new(CompilationError {
+                        line_number: opening_token.line_number,
+                        kind: CompilationErrorKind::UnclosedBlock,
+                    }))
+                }
                 Some(Token {
                     token_type: TokenType::RightBrace,
                     ..
@@ -152,7 +172,10 @@ impl<'a> Compiler<'a> {
         let (prefix_rule, _, _) = get_rules(token.token_type);
         let prefix_rule = match prefix_rule {
             None => {
-                return Err(Box::new(CompilationError::ExpectedExpression(token)));
+                return Err(Box::new(CompilationError {
+                    line_number: token.line_number,
+                    kind: CompilationErrorKind::ExpectedExpression(token.source),
+                }))
             }
             Some(prefix_rule) => prefix_rule,
         };
@@ -176,16 +199,29 @@ impl<'a> Compiler<'a> {
             self.scanner.consume()?;
             infix_rule(self, token, can_assign)?;
         }
-        if let Some(token) = match_token_type(&mut self.scanner, TokenType::Equal)? {
-            if can_assign {
-                return Err(Box::new(CompilationError::InvalidAssignmentTarget(token)));
+        // By this point we've compiled a full expression. The only case where we can assign to
+        // the expression is if it's an identifier. In this case, the prefix_rule above is prefix_variable,
+        // and that function consumed the trailing equals token. Thus if there is an equals sign here
+        // it means that code path wasn't taken, and the expression cannot be assigned to.
+        if can_assign {
+            if let Some(token) = match_token_type(&mut self.scanner, TokenType::Equal)? {
+                return Err(Box::new(CompilationError {
+                    line_number: token.line_number,
+                    kind: CompilationErrorKind::InvalidAssignmentTarget(token.source),
+                }));
             }
         }
         Ok(())
     }
 
     fn emit_op(&mut self, op: Op) {
+        let l = self.chunk.bytecode.len();
         op.write(&mut self.chunk.bytecode);
+        // TODO: optimize the line numbers array. Two ideas: store line numbers
+        // as diffs, and use a variable encoding.
+        for _ in l..self.chunk.bytecode.len() {
+            self.chunk.line_numbers.push(self.scanner.line_number());
+        }
     }
 
     fn add_constant(
@@ -202,7 +238,10 @@ impl<'a> Compiler<'a> {
         self.chunk.constants.push(constant);
         match i.try_into() {
             Ok(i) => Ok(i),
-            Err(_) => Err(Box::new(CompilationError::TooManyConstants(token))),
+            Err(_) => Err(Box::new(CompilationError {
+                line_number: token.line_number,
+                kind: CompilationErrorKind::TooManyConstants,
+            })),
         }
     }
 }
@@ -210,19 +249,21 @@ impl<'a> Compiler<'a> {
 fn consume_specific_token<'a>(
     scanner: &mut scanner::Scanner<'a>,
     token_type: TokenType,
+    f: fn(token_or: &'a str) -> CompilationErrorKind,
 ) -> Result<Token<'a>, Box<CompilationError<'a>>> {
     match scanner.next()? {
-        None => Err(Box::new(CompilationError::UnexpectedTokenType(
-            None, token_type,
-        ))),
+        None => Err(Box::new(CompilationError {
+            line_number: scanner.line_number(),
+            kind: f(""),
+        })),
         Some(token) => {
             if token.token_type == token_type {
                 Ok(token)
             } else {
-                Err(Box::new(CompilationError::UnexpectedTokenType(
-                    Some(token),
-                    token_type,
-                )))
+                Err(Box::new(CompilationError {
+                    line_number: scanner.line_number(),
+                    kind: f(token.source),
+                }))
             }
         }
     }
@@ -351,7 +392,9 @@ fn prefix_left_paren<'a>(
     _: bool,
 ) -> Result<(), Box<CompilationError<'a>>> {
     c.expression()?;
-    consume_specific_token(&mut c.scanner, TokenType::RightParen)?;
+    consume_specific_token(&mut c.scanner, TokenType::RightParen, |_| {
+        CompilationErrorKind::Todo(4)
+    })?;
     Ok(())
 }
 
@@ -381,7 +424,12 @@ fn prefix_number<'a>(
 ) -> Result<(), Box<CompilationError<'a>>> {
     let d = match token.source.parse::<f64>() {
         Ok(d) => d,
-        Err(_) => return Err(Box::new(CompilationError::InvalidNumber(token))),
+        Err(_) => {
+            return Err(Box::new(CompilationError {
+                line_number: token.line_number,
+                kind: CompilationErrorKind::InvalidNumber,
+            }))
+        }
     };
     let i = s.add_constant(token, Value::Number(d))?;
     s.emit_op(Op::Constant(i));

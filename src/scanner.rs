@@ -1,4 +1,4 @@
-use crate::error::ScannerError;
+use crate::error::{CompilationError, CompilationErrorKind};
 
 pub struct Scanner<'a> {
     source: &'a str,
@@ -15,26 +15,29 @@ impl<'a> Scanner<'a> {
         }
     }
 
-    pub fn next(&mut self) -> Result<Option<Token<'a>>, Box<ScannerError<'a>>> {
+    pub fn line_number(&self) -> usize {
+        self.line_number
+    }
+    pub fn next(&mut self) -> Result<Option<Token<'a>>, Box<CompilationError<'a>>> {
         match self.cache.take() {
             None => self.scan(),
             Some(token) => Ok(Some(token)),
         }
     }
 
-    pub fn peek(&mut self) -> Result<Option<Token<'a>>, Box<ScannerError<'a>>> {
+    pub fn peek(&mut self) -> Result<Option<Token<'a>>, Box<CompilationError<'a>>> {
         if self.cache.is_none() {
             self.cache = self.scan()?;
         }
         Ok(self.cache)
     }
 
-    pub fn consume(&mut self) -> Result<(), Box<ScannerError<'a>>> {
+    pub fn consume(&mut self) -> Result<(), Box<CompilationError<'a>>> {
         self.next()?;
         Ok(())
     }
 
-    fn scan(&mut self) -> Result<Option<Token<'a>>, Box<ScannerError<'a>>> {
+    fn scan(&mut self) -> Result<Option<Token<'a>>, Box<CompilationError<'a>>> {
         self.skip_whitespace();
         let mut chars = self.source.chars();
         let c = match chars.next() {
@@ -86,12 +89,16 @@ impl<'a> Scanner<'a> {
                 loop {
                     match chars.next() {
                         None => {
-                            return Err(Box::new(ScannerError::UnterminatedString(
-                                self.line_number,
-                                self.source,
-                            )))
+                            return Err(Box::new(CompilationError {
+                                line_number: self.line_number,
+                                kind: CompilationErrorKind::UnterminatedString(self.source),
+                            }))
                         }
                         Some('"') => break,
+                        Some('\n') => {
+                            self.line_number += 1;
+                            len += 1;
+                        }
                         Some(c) => {
                             len += c.len_utf8();
                         }
@@ -134,7 +141,12 @@ impl<'a> Scanner<'a> {
                 }
                 (identifier_token_type(&self.source[..len]), len)
             }
-            _ => return Err(Box::new(ScannerError::InvalidCharacter(self.source))),
+            _ => {
+                return Err(Box::new(CompilationError {
+                    line_number: self.line_number,
+                    kind: CompilationErrorKind::InvalidCharacter(c),
+                }))
+            }
         };
         let token_text = &self.source[..len];
         self.source = &self.source[len..];

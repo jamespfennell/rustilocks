@@ -14,3 +14,10 @@ print breakfast;
   var c = a + b;
   print c;
 }
+
+{
+  var a = 16;
+  print a;
+  a = 32;
+  print a;
+}

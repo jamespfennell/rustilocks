@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::chunk;
 use crate::chunk::Op;
-use crate::error::{InvalidBytecodeError, RuntimeError};
+use crate::error::{InvalidBytecodeError, RuntimeError, RuntimeErrorKind};
 use crate::value::{loxstring, Value};
 
 pub struct VM {
@@ -25,10 +25,23 @@ impl Default for VM {
 
 impl VM {
     pub fn run(&mut self, chunk: &chunk::Chunk) -> Result<(), Box<RuntimeError>> {
-        let mut ip: &[u8] = &chunk.bytecode;
+        let mut ip_offset = 0_usize;
         let mut value_stack = vec![];
-        while !ip.is_empty() {
-            let (op, new_ip) = Op::read(ip)?;
+        while ip_offset < chunk.bytecode.len() {
+            let (op, increment) = match Op::read(&chunk.bytecode[ip_offset..]) {
+                Ok(ok) => ok,
+                Err(err) => {
+                    return Err(Box::new(RuntimeError {
+                        // We put a dummy op here because this error is not associated
+                        // to a fully deserialized op. It doesn't seem worth it to encode this
+                        // fact in the type system.
+                        op: Op::Return,
+                        line_number: chunk.line_numbers.get(ip_offset).copied(),
+                        kind: RuntimeErrorKind::InvalidBytecode(*err),
+                    }));
+                }
+            };
+            let new_ip_offset = ip_offset + increment as usize;
             match op {
                 Op::Return => return Ok(()),
                 Op::Constant(i) => {
@@ -41,9 +54,10 @@ impl VM {
                         (Op::Not, _) => Value::Bool(operand.is_falsey()),
                         (Op::Negate, Value::Number(d)) => Value::Number(-d),
                         _ => {
-                            return Err(Box::new(RuntimeError::InvalidTypeForUnaryOp {
-                                operand,
+                            return Err(Box::new(RuntimeError {
                                 op,
+                                line_number: chunk.line_numbers.get(ip_offset).copied(),
+                                kind: RuntimeErrorKind::InvalidTypeForUnaryOp { operand },
                             }))
                         }
                     };
@@ -75,10 +89,13 @@ impl VM {
                         (Op::Greater, Value::Number(a), Value::Number(b)) => Value::Bool(a > b),
                         (Op::Less, Value::Number(a), Value::Number(b)) => Value::Bool(a < b),
                         _ => {
-                            return Err(Box::new(RuntimeError::InvalidTypeForBinaryOp {
-                                left_operand,
-                                right_operand,
+                            return Err(Box::new(RuntimeError {
                                 op,
+                                line_number: chunk.line_numbers.get(ip_offset).copied(),
+                                kind: RuntimeErrorKind::InvalidTypeForBinaryOp {
+                                    left_operand,
+                                    right_operand,
+                                },
                             }))
                         }
                     };
@@ -104,9 +121,13 @@ impl VM {
                     let name = self.read_constant_string(chunk, op, i)?;
                     let value = match self.globals.get(&name) {
                         None => {
-                            return Err(Box::new(RuntimeError::UndefinedVariable(
-                                name.as_str(&self.string_interner).into(),
-                            )))
+                            return Err(Box::new(RuntimeError {
+                                op,
+                                line_number: chunk.line_numbers.get(ip_offset).copied(),
+                                kind: RuntimeErrorKind::UndefinedVariable(
+                                    name.as_str(&self.string_interner).into(),
+                                ),
+                            }))
                         }
                         Some(value) => *value,
                     };
@@ -117,9 +138,13 @@ impl VM {
                     let new_value = pop_one(&mut value_stack, op)?;
                     match self.globals.get_mut(&name) {
                         None => {
-                            return Err(Box::new(RuntimeError::UndefinedVariable(
-                                name.as_str(&self.string_interner).into(),
-                            )))
+                            return Err(Box::new(RuntimeError {
+                                op,
+                                line_number: chunk.line_numbers.get(ip_offset).copied(),
+                                kind: RuntimeErrorKind::UndefinedVariable(
+                                    name.as_str(&self.string_interner).into(),
+                                ),
+                            }))
                         }
                         Some(value) => {
                             *value = new_value;
@@ -143,7 +168,7 @@ impl VM {
                         .expect("local references valid index of stack") = value;
                 }
             }
-            ip = new_ip;
+            ip_offset = new_ip_offset;
         }
         Ok(())
     }
@@ -157,9 +182,11 @@ impl VM {
         let name = self.read_constant(chunk, op, i)?;
         match name {
             Value::String(s) => Ok(s),
-            _ => Err(Box::new(RuntimeError::InvalidBytecode(
-                InvalidBytecodeError::VariableNameNotString { op, value: name },
-            ))),
+            _ => Err(Box::new(RuntimeError {
+                op,
+                line_number: None,
+                kind: InvalidBytecodeError::VariableNameNotString { value: name }.into(),
+            })),
         }
     }
 
@@ -170,12 +197,15 @@ impl VM {
         i: u8,
     ) -> Result<Value, Box<RuntimeError>> {
         match chunk.constants.get(i as usize) {
-            None => Err(Box::new(RuntimeError::InvalidBytecode(
-                InvalidBytecodeError::InvalidConstantIndex {
-                    op,
+            None => Err(Box::new(RuntimeError {
+                op,
+                line_number: None,
+                kind: InvalidBytecodeError::InvalidConstantIndex {
+                    index: i,
                     num_constants: chunk.constants.len(),
-                },
-            ))),
+                }
+                .into(),
+            })),
             Some(constant_value) => match constant_value {
                 Value::String(lox_string) => {
                     // We assume that strings can be compared by pointer value because they are interned
@@ -200,34 +230,43 @@ impl VM {
     }
 }
 
-fn pop_one(value_stack: &mut Vec<Value>, op: Op) -> Result<Value, Box<InvalidBytecodeError>> {
+fn pop_one(value_stack: &mut Vec<Value>, op: Op) -> Result<Value, Box<RuntimeError>> {
     match value_stack.pop() {
-        None => Err(Box::new(InvalidBytecodeError::ValueStackTooSmall {
+        None => Err(Box::new(RuntimeError {
             op,
-            stack_size_needed: 1,
-            stack_size_actual: 0,
+            line_number: None,
+            kind: InvalidBytecodeError::ValueStackTooSmall {
+                stack_size_needed: 1,
+                stack_size_actual: 0,
+            }
+            .into(),
         })),
         Some(value) => Ok(value),
     }
 }
 
-fn pop_two(
-    value_stack: &mut Vec<Value>,
-    op: Op,
-) -> Result<(Value, Value), Box<InvalidBytecodeError>> {
+fn pop_two(value_stack: &mut Vec<Value>, op: Op) -> Result<(Value, Value), Box<RuntimeError>> {
     let rhs = match value_stack.pop() {
-        None => Err(Box::new(InvalidBytecodeError::ValueStackTooSmall {
+        None => Err(Box::new(RuntimeError {
             op,
-            stack_size_needed: 2,
-            stack_size_actual: 0,
+            line_number: None,
+            kind: InvalidBytecodeError::ValueStackTooSmall {
+                stack_size_needed: 2,
+                stack_size_actual: 0,
+            }
+            .into(),
         })),
         Some(value) => Ok(value),
     }?;
     let lhs = match value_stack.pop() {
-        None => Err(Box::new(InvalidBytecodeError::ValueStackTooSmall {
+        None => Err(Box::new(RuntimeError {
             op,
-            stack_size_needed: 2,
-            stack_size_actual: 1,
+            line_number: None,
+            kind: InvalidBytecodeError::ValueStackTooSmall {
+                stack_size_needed: 1,
+                stack_size_actual: 0,
+            }
+            .into(),
         })),
         Some(value) => Ok(value),
     }?;
@@ -274,6 +313,7 @@ mod tests {
                 let constants = $constants_preprocessor(&mut string_interner, $in_constants);
                 let chunk = chunk::Chunk {
                     bytecode,
+                    line_numbers: vec![],
                     constants,
                     string_interner,
                 };

@@ -9,6 +9,9 @@ pub fn serialize_chunk(chunk: &chunk::Chunk) -> Vec<u8> {
         .bytecode
         .serialize(&mut buffer, &chunk.string_interner);
     chunk
+        .line_numbers
+        .serialize(&mut buffer, &chunk.string_interner);
+    chunk
         .constants
         .serialize(&mut buffer, &chunk.string_interner);
     buffer
@@ -18,6 +21,7 @@ pub fn deserialize_chunk(b: &[u8]) -> Result<chunk::Chunk, String> {
     let mut buffer = Buffer { b };
     let mut string_interner: Interner = Default::default();
     let bytecode = Vec::<u8>::deserialize(&mut buffer, &mut string_interner)?;
+    let line_numbers = Vec::<usize>::deserialize(&mut buffer, &mut string_interner)?;
     let constants = Vec::<Value>::deserialize(&mut buffer, &mut string_interner)?;
     if !buffer.b.is_empty() {
         return Err(format!("found {} trailing bytes", buffer.b.len()));
@@ -25,6 +29,7 @@ pub fn deserialize_chunk(b: &[u8]) -> Result<chunk::Chunk, String> {
     Ok(chunk::Chunk {
         bytecode,
         constants,
+        line_numbers,
         string_interner,
     })
 }
@@ -64,7 +69,12 @@ macro_rules! numeric_serde_impl {
     )+ };
 }
 
-numeric_serde_impl!((f64, "f64", 8), (u64, "u64", 8), (u8, "u8", 1),);
+numeric_serde_impl!(
+    (f64, "f64", 8),
+    (u64, "u64", 8),
+    (u8, "u8", 1),
+    (usize, "usize", 8),
+);
 
 impl Serde for bool {
     fn serialize(&self, buffer: &mut Vec<u8>, _: &loxstring::Interner) {
@@ -171,6 +181,7 @@ mod tests {
     fn serde_chunk() {
         let chunk = chunk::Chunk {
             bytecode: vec![1, 201, 3, 4],
+            line_numbers: vec![20, 21, 22, 23],
             constants: vec![Value::Number(3.14)],
             string_interner: Default::default(),
         };

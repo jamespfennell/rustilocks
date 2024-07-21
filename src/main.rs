@@ -111,7 +111,7 @@ fn main() {
             };
             let mut vm = vm::VM::default();
             if let Err(e) = vm.run(&chunk) {
-                eprintln!("{e}\n[line 7] in script");
+                eprintln!("{e}\n[line {}] in script", e.line_number.unwrap_or(0));
                 // TODO: should copy clox's return exit codes in all places
                 exit(70);
             }

@@ -1,53 +1,54 @@
 use std::fmt::Display;
 
-use crate::{
-    chunk::Op,
-    scanner::{Token, TokenType},
-    value::Value,
-};
+use crate::{chunk::Op, value::Value};
 
 #[derive(Debug)]
-pub enum RuntimeError {
+pub struct RuntimeError {
+    pub op: Op,
+    pub line_number: Option<usize>,
+    pub kind: RuntimeErrorKind,
+}
+
+#[derive(Debug)]
+pub enum RuntimeErrorKind {
     InvalidBytecode(InvalidBytecodeError),
     InvalidTypeForUnaryOp {
         operand: Value,
-        op: Op,
     },
     InvalidTypeForBinaryOp {
         left_operand: Value,
         right_operand: Value,
-        op: Op,
     },
     UndefinedVariable(String),
 }
 
-impl From<Box<InvalidBytecodeError>> for Box<RuntimeError> {
-    fn from(e: Box<InvalidBytecodeError>) -> Self {
-        Box::new(RuntimeError::InvalidBytecode(*e))
-    }
-}
-
 impl Display for RuntimeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-      use RuntimeError::*;
-      match self {
-        UndefinedVariable(variable_name) => {
-          write!(f, "Undefined variable '{variable_name}'.")
+        use RuntimeErrorKind::*;
+        match &self.kind {
+            UndefinedVariable(variable_name) => {
+                write!(f, "Undefined variable '{variable_name}'.")
+            }
+            InvalidTypeForUnaryOp { .. } => {
+                write!(f, "Operand must be a number.")
+            }
+            InvalidTypeForBinaryOp { .. } => match self.op {
+                Op::Add => write!(f, "Operands must be two numbers or two strings."),
+                _ => write!(f, "Operands must be numbers."),
+            },
+            _ => write!(f, "todo {:?}", self.kind),
         }
-        _ => write!(f, "todo {:?}", self)
-      }
     }
 }
 
 #[derive(Debug)]
 pub enum InvalidBytecodeError {
     ValueStackTooSmall {
-        op: Op,
-        stack_size_actual: usize,
-        stack_size_needed: usize,
+        stack_size_actual: u8,
+        stack_size_needed: u8,
     },
     InvalidConstantIndex {
-        op: Op,
+        index: u8,
         num_constants: usize,
     },
     UnknownOpCode {
@@ -55,58 +56,62 @@ pub enum InvalidBytecodeError {
     },
     EmptyBytecode,
     MissingOpArgument {
-        op: Op,
+        op_code: u8,
     },
     VariableNameNotString {
-        op: Op,
         value: Value,
     },
 }
 
-#[derive(Debug)]
-pub enum ScannerError<'a> {
-    InvalidCharacter(&'a str),
-    UnterminatedString(usize, &'a str),
+impl From<InvalidBytecodeError> for RuntimeErrorKind {
+    fn from(value: InvalidBytecodeError) -> Self {
+        RuntimeErrorKind::InvalidBytecode(value)
+    }
 }
 
 #[derive(Debug)]
-pub enum CompilationError<'a> {
-    Scanner(ScannerError<'a>),
-    TooManyConstants(Token<'a>),
-    ExpectedExpression(Token<'a>),
-    UnexpectedToken(Token<'a>, &'static str),
-    UnexpectedTokenType(Option<Token<'a>>, TokenType),
-    MissingToken(&'static str),
-    InvalidNumber(Token<'a>),
-    InvalidAssignmentTarget(Token<'a>),
-    UnclosedBlock(Token<'a>),
-    TooManyLocals(Token<'a>),
-    LocalRedeclared(Token<'a>),
+pub struct CompilationError<'a> {
+    pub line_number: usize,
+    pub kind: CompilationErrorKind<'a>,
+}
+
+#[derive(Debug)]
+pub enum CompilationErrorKind<'a> {
+    Todo(usize),
+    //
+    InvalidCharacter(char),
+    UnterminatedString(&'a str),
+    TooManyConstants,
+    ExpectedExpression(&'a str),
+    ExpectedIdentifier(&'a str),
+    InvalidNumber,
+    InvalidAssignmentTarget(&'a str),
+    UnclosedBlock,
+    TooManyLocals,
+    LocalRedeclared,
 }
 
 impl<'a> CompilationError<'a> {
     pub fn line_number(&self) -> usize {
-        use CompilationError::*;
-        match self {
-            ExpectedExpression(token) | InvalidAssignmentTarget(token) => token.line_number,
-            _ => 0,
-        }
+        self.line_number
     }
 
     pub fn at(&self) -> Option<&'a str> {
-        use CompilationError::*;
-        match self {
-            ExpectedExpression(token) | InvalidAssignmentTarget(token) => Some(token.source),
+        use CompilationErrorKind::*;
+        match self.kind {
+            ExpectedExpression(at) | InvalidAssignmentTarget(at) | ExpectedIdentifier(at) => {
+                Some(at)
+            }
             _ => None,
         }
     }
     pub fn message(&self) -> &'static str {
-        use CompilationError::*;
-        use ScannerError::*;
-        match self {
+        use CompilationErrorKind::*;
+        match self.kind {
             ExpectedExpression(_) => "Expect expression.",
             InvalidAssignmentTarget(_) => "Invalid assignment target.",
-            Scanner(UnterminatedString(..)) => "Unterminated string.",
+            UnterminatedString(..) => "Unterminated string.",
+            ExpectedIdentifier(_) => "Expect variable name.",
             _ => {
                 println!("{:?}", self);
                 "todo"
@@ -122,11 +127,5 @@ impl<'a> Display for CompilationError<'a> {
             write!(f, " at '{}'", at)?;
         }
         write!(f, ": {}", self.message())
-    }
-}
-
-impl<'a> From<Box<ScannerError<'a>>> for Box<CompilationError<'a>> {
-    fn from(e: Box<ScannerError<'a>>) -> Self {
-        Box::new(CompilationError::Scanner(*e))
     }
 }
