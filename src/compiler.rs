@@ -34,11 +34,11 @@ struct Local {
 }
 
 impl<'a> Compiler<'a> {
-    fn expression(&mut self) -> Result<(), Box<CompilationError<'a>>> {
+    fn expression(&mut self) -> Result<(), Box<CompilationError>> {
         self.parse_precendence(Precedence::Assignment)
     }
 
-    fn declaration(&mut self) -> Result<(), Box<CompilationError<'a>>> {
+    fn declaration(&mut self) -> Result<(), Box<CompilationError>> {
         let next = match self.scanner.peek()? {
             None => return Ok(()),
             Some(next) => next,
@@ -47,8 +47,8 @@ impl<'a> Compiler<'a> {
             TokenType::Var => {
                 self.scanner.consume()?;
                 let name_token =
-                    consume_specific_token(&mut self.scanner, TokenType::Identifier, |at| {
-                        CompilationErrorKind::ExpectedIdentifier(at)
+                    consume_specific_token(&mut self.scanner, TokenType::Identifier, |_| {
+                        CompilationErrorKind::ExpectedIdentifier
                     })?;
                 let name = self.chunk.string_interner.intern_ref(name_token.source);
 
@@ -66,13 +66,15 @@ impl<'a> Compiler<'a> {
                         if local.name == name {
                             return Err(Box::new(CompilationError {
                                 line_number: self.scanner.line_number(),
-                                kind: CompilationErrorKind::LocalRedeclared(name_token.source),
+                                at: name_token.source.into(),
+                                kind: CompilationErrorKind::LocalRedeclared,
                             }));
                         }
                     }
                     if self.locals.len() == 256 {
                         return Err(Box::new(CompilationError {
                             line_number: self.scanner.line_number(),
+                            at: "".into(),
                             kind: CompilationErrorKind::TooManyLocals,
                         }));
                     }
@@ -116,7 +118,7 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn statement(&mut self) -> Result<(), Box<CompilationError<'a>>> {
+    fn statement(&mut self) -> Result<(), Box<CompilationError>> {
         let next = match self.scanner.peek()? {
             None => return Ok(()),
             Some(next) => next,
@@ -155,12 +157,13 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn block(&mut self, opening_token: Token<'a>) -> Result<(), Box<CompilationError<'a>>> {
+    fn block(&mut self, opening_token: Token<'a>) -> Result<(), Box<CompilationError>> {
         loop {
             match self.scanner.peek()? {
                 None => {
                     return Err(Box::new(CompilationError {
                         line_number: opening_token.line_number,
+                        at: "".into(),
                         kind: CompilationErrorKind::UnclosedBlock,
                     }))
                 }
@@ -179,10 +182,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn parse_precendence(
-        &mut self,
-        precedence: Precedence,
-    ) -> Result<(), Box<CompilationError<'a>>> {
+    fn parse_precendence(&mut self, precedence: Precedence) -> Result<(), Box<CompilationError>> {
         let token = match self.scanner.next()? {
             None => return Ok(()),
             Some(token) => token,
@@ -190,10 +190,10 @@ impl<'a> Compiler<'a> {
         let (prefix_rule, _, _) = get_rules(token.token_type);
         let prefix_rule = match prefix_rule {
             None => {
-                return Err(Box::new(CompilationError {
-                    line_number: token.line_number,
-                    kind: CompilationErrorKind::ExpectedExpression(token.source),
-                }))
+                return Err(CompilationError::new(
+                    token,
+                    CompilationErrorKind::ExpectedExpression,
+                ))
             }
             Some(prefix_rule) => prefix_rule,
         };
@@ -223,10 +223,10 @@ impl<'a> Compiler<'a> {
         // it means that code path wasn't taken, and the expression cannot be assigned to.
         if can_assign {
             if let Some(token) = match_token_type(&mut self.scanner, TokenType::Equal)? {
-                return Err(Box::new(CompilationError {
-                    line_number: token.line_number,
-                    kind: CompilationErrorKind::InvalidAssignmentTarget(token.source),
-                }));
+                return Err(CompilationError::new(
+                    token,
+                    CompilationErrorKind::InvalidAssignmentTarget,
+                ));
             }
         }
         Ok(())
@@ -246,7 +246,7 @@ impl<'a> Compiler<'a> {
         &mut self,
         token: Token<'a>,
         constant: Value,
-    ) -> Result<u8, Box<CompilationError<'a>>> {
+    ) -> Result<u8, Box<CompilationError>> {
         for (i, existing_constant) in self.chunk.constants.iter().enumerate() {
             if constant == *existing_constant {
                 return Ok(i.try_into().expect("there are only 256 constants"));
@@ -258,6 +258,7 @@ impl<'a> Compiler<'a> {
             Ok(i) => Ok(i),
             Err(_) => Err(Box::new(CompilationError {
                 line_number: token.line_number,
+                at: "".into(),
                 kind: CompilationErrorKind::TooManyConstants,
             })),
         }
@@ -268,10 +269,11 @@ fn consume_specific_token<'a>(
     scanner: &mut scanner::Scanner<'a>,
     token_type: TokenType,
     f: fn(token_or: &'a str) -> CompilationErrorKind,
-) -> Result<Token<'a>, Box<CompilationError<'a>>> {
+) -> Result<Token<'a>, Box<CompilationError>> {
     match scanner.next()? {
         None => Err(Box::new(CompilationError {
             line_number: scanner.line_number(),
+            at: "".into(),
             kind: f(""),
         })),
         Some(token) => {
@@ -280,6 +282,7 @@ fn consume_specific_token<'a>(
             } else {
                 Err(Box::new(CompilationError {
                     line_number: scanner.line_number(),
+                    at: token.source.into(),
                     kind: f(token.source),
                 }))
             }
@@ -302,8 +305,7 @@ enum Precedence {
                     // Primary = 10,
 }
 
-type ParseRule<'a> =
-    fn(s: &mut Compiler<'a>, Token<'a>, bool) -> Result<(), Box<CompilationError<'a>>>;
+type ParseRule<'a> = fn(s: &mut Compiler<'a>, Token<'a>, bool) -> Result<(), Box<CompilationError>>;
 
 fn get_rules<'a>(
     token_type: TokenType,
@@ -359,11 +361,7 @@ fn get_rules<'a>(
 
 // TODO: if this turns out to be the only infix function then we should refactor the code to
 // not go through the rules at all. This way we could avoid double matching on the token type.
-fn infix_binary<'a>(
-    c: &mut Compiler<'a>,
-    token: Token,
-    _: bool,
-) -> Result<(), Box<CompilationError<'a>>> {
+fn infix_binary(c: &mut Compiler, token: Token, _: bool) -> Result<(), Box<CompilationError>> {
     let (next_precedence, op_1, op_2) = match token.token_type {
         TokenType::Plus => (Precedence::Factor, Op::Add, None),
         TokenType::Minus => (Precedence::Factor, Op::Subtract, None),
@@ -385,30 +383,18 @@ fn infix_binary<'a>(
     Ok(())
 }
 
-fn prefix_bang<'a>(
-    c: &mut Compiler<'a>,
-    _: Token,
-    _: bool,
-) -> Result<(), Box<CompilationError<'a>>> {
+fn prefix_bang(c: &mut Compiler, _: Token, _: bool) -> Result<(), Box<CompilationError>> {
     c.parse_precendence(Precedence::Unary)?;
     c.emit_op(Op::Not);
     Ok(())
 }
 
-fn prefix_false<'a>(
-    c: &mut Compiler<'a>,
-    _: Token,
-    _: bool,
-) -> Result<(), Box<CompilationError<'a>>> {
+fn prefix_false(c: &mut Compiler, _: Token, _: bool) -> Result<(), Box<CompilationError>> {
     c.emit_op(Op::False);
     Ok(())
 }
 
-fn prefix_left_paren<'a>(
-    c: &mut Compiler<'a>,
-    _: Token,
-    _: bool,
-) -> Result<(), Box<CompilationError<'a>>> {
+fn prefix_left_paren(c: &mut Compiler, _: Token, _: bool) -> Result<(), Box<CompilationError>> {
     c.expression()?;
     consume_specific_token(&mut c.scanner, TokenType::RightParen, |_| {
         CompilationErrorKind::Todo(4)
@@ -416,21 +402,13 @@ fn prefix_left_paren<'a>(
     Ok(())
 }
 
-fn prefix_minus<'a>(
-    c: &mut Compiler<'a>,
-    _: Token,
-    _: bool,
-) -> Result<(), Box<CompilationError<'a>>> {
+fn prefix_minus(c: &mut Compiler, _: Token, _: bool) -> Result<(), Box<CompilationError>> {
     c.parse_precendence(Precedence::Unary)?;
     c.emit_op(Op::Negate);
     Ok(())
 }
 
-fn prefix_nil<'a>(
-    c: &mut Compiler<'a>,
-    _: Token,
-    _: bool,
-) -> Result<(), Box<CompilationError<'a>>> {
+fn prefix_nil(c: &mut Compiler, _: Token, _: bool) -> Result<(), Box<CompilationError>> {
     c.emit_op(Op::Nil);
     Ok(())
 }
@@ -439,14 +417,14 @@ fn prefix_number<'a>(
     s: &mut Compiler<'a>,
     token: Token<'a>,
     _: bool,
-) -> Result<(), Box<CompilationError<'a>>> {
+) -> Result<(), Box<CompilationError>> {
     let d = match token.source.parse::<f64>() {
         Ok(d) => d,
         Err(_) => {
-            return Err(Box::new(CompilationError {
-                line_number: token.line_number,
-                kind: CompilationErrorKind::InvalidNumber,
-            }))
+            return Err(CompilationError::new(
+                token,
+                CompilationErrorKind::InvalidNumber,
+            ))
         }
     };
     let i = s.add_constant(token, Value::Number(d))?;
@@ -458,7 +436,7 @@ fn prefix_string<'a>(
     c: &mut Compiler<'a>,
     token: Token<'a>,
     _: bool,
-) -> Result<(), Box<CompilationError<'a>>> {
+) -> Result<(), Box<CompilationError>> {
     // We need to trim the opening and closing quotation marks.
     let s = &token.source[1..token.source.len() - 1];
     let value = Value::String(c.chunk.string_interner.intern_ref(s));
@@ -467,11 +445,7 @@ fn prefix_string<'a>(
     Ok(())
 }
 
-fn prefix_true<'a>(
-    c: &mut Compiler<'a>,
-    _: Token,
-    _: bool,
-) -> Result<(), Box<CompilationError<'a>>> {
+fn prefix_true(c: &mut Compiler, _: Token, _: bool) -> Result<(), Box<CompilationError>> {
     c.emit_op(Op::True);
     Ok(())
 }
@@ -480,7 +454,7 @@ fn prefix_variable<'a>(
     c: &mut Compiler<'a>,
     token: Token<'a>,
     can_assign: bool,
-) -> Result<(), Box<CompilationError<'a>>> {
+) -> Result<(), Box<CompilationError>> {
     let name = c.chunk.string_interner.intern_ref(token.source);
     let mut local_index: Option<u8> = None;
     for (i, local) in c.locals.iter().enumerate().rev() {
@@ -489,7 +463,8 @@ fn prefix_variable<'a>(
             if !local.initialized {
                 return Err(Box::new(CompilationError {
                     line_number: token.line_number,
-                    kind: CompilationErrorKind::LocalUninitialized(token.source),
+                    at: token.source.into(),
+                    kind: CompilationErrorKind::LocalUninitialized,
                 }));
             }
             local_index = Some(i.try_into().expect("no more than 256 locals"));
@@ -517,7 +492,7 @@ fn prefix_variable<'a>(
 fn match_token_type<'a>(
     scanner: &mut scanner::Scanner<'a>,
     token_type: TokenType,
-) -> Result<Option<Token<'a>>, Box<CompilationError<'a>>> {
+) -> Result<Option<Token<'a>>, Box<CompilationError>> {
     let next_token = scanner.peek()?;
     if next_token.map(|t| t.token_type) == Some(token_type) {
         scanner.consume()?;

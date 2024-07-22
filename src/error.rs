@@ -1,6 +1,6 @@
 use std::fmt::Display;
 
-use crate::{chunk::Op, value::Value};
+use crate::{chunk::Op, scanner::Token, value::Value};
 
 #[derive(Debug)]
 pub struct RuntimeError {
@@ -70,53 +70,57 @@ impl From<InvalidBytecodeError> for RuntimeErrorKind {
 }
 
 #[derive(Debug)]
-pub struct CompilationError<'a> {
+pub struct CompilationError {
     pub line_number: usize,
-    pub kind: CompilationErrorKind<'a>,
+    pub at: String,
+    pub kind: CompilationErrorKind,
 }
 
 #[derive(Debug)]
-pub enum CompilationErrorKind<'a> {
+pub enum CompilationErrorKind {
     Todo(usize),
     //
-    InvalidCharacter(char),
-    UnterminatedString(&'a str),
+    InvalidCharacter,
+    UnterminatedString,
     TooManyConstants,
-    ExpectedExpression(&'a str),
-    ExpectedIdentifier(&'a str),
+    ExpectedExpression,
+    ExpectedIdentifier,
     InvalidNumber,
-    InvalidAssignmentTarget(&'a str),
+    InvalidAssignmentTarget,
     UnclosedBlock,
     TooManyLocals,
-    LocalRedeclared(&'a str),
-    LocalUninitialized(&'a str),
+    LocalRedeclared,
+    LocalUninitialized,
 }
 
-impl<'a> CompilationError<'a> {
+impl<'a> CompilationError {
+    pub fn new(token: Token, kind: CompilationErrorKind) -> Box<Self> {
+        Box::new(Self {
+            line_number: token.line_number,
+            at: token.source.into(),
+            kind,
+        })
+    }
     pub fn line_number(&self) -> usize {
         self.line_number
     }
 
-    pub fn at(&self) -> Option<&'a str> {
-        use CompilationErrorKind::*;
-        match self.kind {
-            ExpectedExpression(at)
-            | InvalidAssignmentTarget(at)
-            | ExpectedIdentifier(at)
-            | LocalRedeclared(at)
-            | LocalUninitialized(at) => Some(at),
-            _ => None,
+    pub fn at(&'a self) -> Option<&'a str> {
+        if self.at.is_empty() {
+            None
+        } else {
+            Some(&self.at)
         }
     }
     pub fn message(&self) -> &'static str {
         use CompilationErrorKind::*;
         match self.kind {
-            ExpectedExpression(_) => "Expect expression.",
-            InvalidAssignmentTarget(_) => "Invalid assignment target.",
-            UnterminatedString(..) => "Unterminated string.",
-            ExpectedIdentifier(_) => "Expect variable name.",
-            LocalRedeclared(_) => "Already a variable with this name in this scope.",
-            LocalUninitialized(_) => "Can't read local variable in its own initializer.",
+            ExpectedExpression => "Expect expression.",
+            InvalidAssignmentTarget => "Invalid assignment target.",
+            UnterminatedString => "Unterminated string.",
+            ExpectedIdentifier => "Expect variable name.",
+            LocalRedeclared => "Already a variable with this name in this scope.",
+            LocalUninitialized => "Can't read local variable in its own initializer.",
             _ => {
                 println!("{:?}", self);
                 "todo"
@@ -125,7 +129,7 @@ impl<'a> CompilationError<'a> {
     }
 }
 
-impl<'a> Display for CompilationError<'a> {
+impl Display for CompilationError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "[line {}] Error", self.line_number())?;
         if let Some(at) = self.at() {

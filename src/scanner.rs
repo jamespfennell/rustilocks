@@ -18,26 +18,26 @@ impl<'a> Scanner<'a> {
     pub fn line_number(&self) -> usize {
         self.line_number
     }
-    pub fn next(&mut self) -> Result<Option<Token<'a>>, Box<CompilationError<'a>>> {
+    pub fn next(&mut self) -> Result<Option<Token<'a>>, Box<CompilationError>> {
         match self.cache.take() {
             None => self.scan(),
             Some(token) => Ok(Some(token)),
         }
     }
 
-    pub fn peek(&mut self) -> Result<Option<Token<'a>>, Box<CompilationError<'a>>> {
+    pub fn peek(&mut self) -> Result<Option<Token<'a>>, Box<CompilationError>> {
         if self.cache.is_none() {
             self.cache = self.scan()?;
         }
         Ok(self.cache)
     }
 
-    pub fn consume(&mut self) -> Result<(), Box<CompilationError<'a>>> {
+    pub fn consume(&mut self) -> Result<(), Box<CompilationError>> {
         self.next()?;
         Ok(())
     }
 
-    fn scan(&mut self) -> Result<Option<Token<'a>>, Box<CompilationError<'a>>> {
+    fn scan(&mut self) -> Result<Option<Token<'a>>, Box<CompilationError>> {
         self.skip_whitespace();
         let mut chars = self.source.chars();
         let c = match chars.next() {
@@ -91,7 +91,8 @@ impl<'a> Scanner<'a> {
                         None => {
                             return Err(Box::new(CompilationError {
                                 line_number: self.line_number,
-                                kind: CompilationErrorKind::UnterminatedString(self.source),
+                                at: "".into(),
+                                kind: CompilationErrorKind::UnterminatedString,
                             }))
                         }
                         Some('"') => break,
@@ -144,7 +145,8 @@ impl<'a> Scanner<'a> {
             _ => {
                 return Err(Box::new(CompilationError {
                     line_number: self.line_number,
-                    kind: CompilationErrorKind::InvalidCharacter(c),
+                    at: c.into(),
+                    kind: CompilationErrorKind::InvalidCharacter,
                 }))
             }
         };
