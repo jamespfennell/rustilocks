@@ -121,7 +121,7 @@ impl<T: Serde> Serde for Vec<T> {
 
 impl Serde for loxstring::LoxString {
     fn serialize(&self, buffer: &mut Vec<u8>, interner: &loxstring::Interner) {
-        self.as_str(interner).as_bytes().serialize(buffer, interner);
+        self.as_str().as_bytes().serialize(buffer, interner);
     }
     fn deserialize(
         buffer: &mut Buffer,

@@ -50,7 +50,7 @@ impl VM {
                 // Unary operators
                 Op::Negate | Op::Not => {
                     let operand = pop_one(&mut value_stack, op)?;
-                    let result = match (op, operand) {
+                    let result = match (op, &operand) {
                         (Op::Not, _) => Value::Bool(operand.is_falsey()),
                         (Op::Negate, Value::Number(d)) => Value::Number(-d),
                         _ => {
@@ -72,11 +72,11 @@ impl VM {
                 | Op::Greater
                 | Op::Less => {
                     let (left_operand, right_operand) = pop_two(&mut value_stack, op)?;
-                    let result = match (op, left_operand, right_operand) {
+                    let result = match (op, &left_operand, &right_operand) {
                         (Op::Equal, _, _) => Value::Bool(left_operand.equal(right_operand)),
                         (Op::Add, Value::String(a), Value::String(b)) => {
-                            let a_ref = a.as_str(&self.string_interner);
-                            let b_ref = b.as_str(&self.string_interner);
+                            let a_ref = a.as_str();
+                            let b_ref = b.as_str();
                             let mut c = String::with_capacity(a.len() + b.len());
                             c.push_str(a_ref);
                             c.push_str(b_ref);
@@ -124,12 +124,10 @@ impl VM {
                             return Err(Box::new(RuntimeError {
                                 op,
                                 line_number: chunk.line_numbers.get(ip_offset).copied(),
-                                kind: RuntimeErrorKind::UndefinedVariable(
-                                    name.as_str(&self.string_interner).into(),
-                                ),
+                                kind: RuntimeErrorKind::UndefinedVariable(name.as_str().into()),
                             }))
                         }
-                        Some(value) => *value,
+                        Some(value) => value.clone(),
                     };
                     value_stack.push(value);
                 }
@@ -141,13 +139,11 @@ impl VM {
                             return Err(Box::new(RuntimeError {
                                 op,
                                 line_number: chunk.line_numbers.get(ip_offset).copied(),
-                                kind: RuntimeErrorKind::UndefinedVariable(
-                                    name.as_str(&self.string_interner).into(),
-                                ),
+                                kind: RuntimeErrorKind::UndefinedVariable(name.as_str().into()),
                             }))
                         }
                         Some(value) => {
-                            *value = new_value;
+                            *value = new_value.clone();
                         }
                     };
                     // This handles the Lox code `a = (b = 3);`. In general, assignment is an
@@ -158,11 +154,11 @@ impl VM {
                     let value = value_stack
                         .get(i as usize)
                         .expect("local references valid index of stack");
-                    value_stack.push(*value);
+                    value_stack.push(value.clone());
                 }
                 Op::SetLocal(i) => {
                     let value = pop_one(&mut value_stack, op)?;
-                    value_stack.push(value);
+                    value_stack.push(value.clone());
                     *value_stack
                         .get_mut(i as usize)
                         .expect("local references valid index of stack") = value;
@@ -221,10 +217,10 @@ impl VM {
                     //
                     // Note this issue doesn't exist in the book because clox uses a global string interner
                     // inside the global VM instance.
-                    let s = lox_string.as_str(&chunk.string_interner);
+                    let s = lox_string.as_str();
                     Ok(Value::String(self.string_interner.intern_ref(s)))
                 }
-                _ => Ok(*constant_value),
+                _ => Ok(constant_value.clone()),
             },
         }
     }

@@ -26,7 +26,7 @@ struct Compiler<'a> {
     scope_depth: usize,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Local {
     name: LoxString,
     depth: usize,
@@ -136,7 +136,7 @@ impl<'a> Compiler<'a> {
                 self.scope_depth += 1;
                 self.scanner.consume()?;
                 self.block(next)?;
-                while let Some(local) = self.locals.last().copied() {
+                while let Some(local) = self.locals.last().cloned() {
                     if local.depth < self.scope_depth {
                         break;
                     }

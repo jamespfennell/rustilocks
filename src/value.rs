@@ -1,7 +1,7 @@
 use loxstring::LoxString;
 use std::fmt::Display;
 
-#[derive(PartialEq, Clone, Copy, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub enum Value {
     Number(f64),
     Bool(bool),
@@ -45,9 +45,10 @@ pub mod loxstring {
     use std::collections::HashSet;
     use std::fmt::Display;
     use std::hash::Hash;
+    use std::rc::Rc;
 
-    #[derive(Debug, Clone, Copy)]
-    pub struct LoxString(&'static str);
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    pub struct LoxString(Rc<str>);
 
     impl LoxString {
         /// Returns the Lox string as string slice.
@@ -58,28 +59,12 @@ pub mod loxstring {
         /// then blocks garbage collection while the return value is being used.
         /// Essentially, we're trying to use the Rust borrow checker to introduce some safetey into the GC.
         /// This is not foolproof as the method current accepts _any_ interner.
-        pub fn as_str<'a>(&self, _: &'a Interner) -> &'a str {
-            self.0
+        pub fn as_str(&self) -> &str {
+            &self.0
         }
 
         pub fn len(&self) -> usize {
             self.0.len()
-        }
-    }
-
-    impl PartialEq for LoxString {
-        fn eq(&self, other: &Self) -> bool {
-            // Because strings are interned, we can compare them using a fast pointer comparison.
-            std::ptr::eq(self.0, other.0)
-        }
-    }
-
-    impl Eq for LoxString {}
-
-    impl Hash for LoxString {
-        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-            // Because strings are interned, we can compare them using a fast pointer comparison.
-            std::ptr::hash(self.0, state)
         }
     }
 
@@ -91,24 +76,23 @@ pub mod loxstring {
 
     #[derive(Default, Debug)]
     pub struct Interner {
-        strings: HashSet<&'static str>,
+        strings: HashSet<Rc<str>>,
     }
 
     impl Interner {
         pub fn intern_ref(&mut self, s: &str) -> LoxString {
             if let Some(s) = self.strings.get(s) {
-                return LoxString(s);
+                return LoxString(s.clone());
             }
             self.intern_owned(s.into())
         }
 
         pub fn intern_owned(&mut self, s: String) -> LoxString {
             if let Some(s) = self.strings.get(&s as &str) {
-                return LoxString(s);
+                return LoxString(s.clone());
             }
-            // TODO: have an interer that doesn't leak memory!
-            let b = Box::leak(s.into_boxed_str());
-            self.strings.insert(b);
+            let b: Rc<str> = s.into();
+            self.strings.insert(b.clone());
             LoxString(b)
         }
     }
