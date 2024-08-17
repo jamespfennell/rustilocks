@@ -1,6 +1,17 @@
-FROM rust:1.62 AS rustilocks
+FROM dart:2 as testrunner
 
 WORKDIR /rustilocks
+COPY tests/craftinginterpreters/tool tool
+RUN cd ./tool; dart pub get
+RUN dart compile exe tool/bin/test.dart -o testrunner
+
+
+FROM rust:1.80 AS rustilocks
+
+WORKDIR /rustilocks
+COPY tests/craftinginterpreters/test test
+COPY --from=testrunner /rustilocks/testrunner /bin
+
 COPY Cargo.toml .
 COPY Cargo.lock .
 RUN mkdir src
@@ -8,15 +19,12 @@ RUN echo 'fn main() { println!["dummy binary"]; }' > src/main.rs
 RUN cargo fetch
 RUN cargo build --release
 COPY src src
-# We need to set the timestamp of main.rs so the compiler knows it's been updated
+# We need to advance the timestamp of main.rs so the compiler knows it's been updated
 RUN touch src/main.rs
 RUN cargo build --release
+RUN cp /rustilocks/target/release/rustilocks /bin
 
-FROM dart:2
+# For future chapters, the E2E test ID can be obtained here:
+# https://github.com/munificent/craftinginterpreters/blob/01e6f5b8f3e5dfa65674c2f9cf4700d73ab41cf8/tool/bin/test.dart#L754-L818
+RUN testrunner chap23_jumping -i rustilocks -a run
 
-WORKDIR /rustilocks
-COPY tests/craftinginterpreters/tool tool
-COPY tests/craftinginterpreters/test test
-RUN cd ./tool; dart pub get
-COPY --from=rustilocks /rustilocks/target/release/rustilocks /bin/
-RUN dart tool/bin/test.dart chap22_local -i rustilocks -a run

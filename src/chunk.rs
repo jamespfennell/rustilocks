@@ -93,6 +93,9 @@ pub enum Op {
     SetGlobal(u8),
     GetLocal(u8),
     SetLocal(u8),
+    JumpIfFalse(u16),
+    Jump(u16),
+    JumpBack(u16),
 }
 
 impl Op {
@@ -103,18 +106,27 @@ impl Op {
             None => return Err(Box::new(InvalidBytecodeError::EmptyBytecode)),
             Some((i, tail)) => (*i, tail),
         };
-        let mut read_one = || match tail.split_first() {
+        let read_u8 = |tail: &mut &[u8]| match tail.split_first() {
             None => Err(Box::new(InvalidBytecodeError::MissingOpArgument {
                 op_code,
             })),
             Some((i, new_tail)) => {
-                tail = new_tail;
+                *tail = new_tail;
                 Ok(*i)
+            }
+        };
+        let read_u16 = |tail: &mut &[u8]| match tail.split_at_checked(2) {
+            None => Err(Box::new(InvalidBytecodeError::MissingOpArgument {
+                op_code,
+            })),
+            Some((i, new_tail)) => {
+                *tail = new_tail;
+                Ok(u16::from_le_bytes([i[0], i[1]]))
             }
         };
         Ok(match op_code {
             0 => (Op::Return, 1),
-            1 => (Op::Constant(read_one()?), 2),
+            1 => (Op::Constant(read_u8(&mut tail)?), 2),
             2 => (Op::Negate, 1),
             3 => (Op::Add, 1),
             4 => (Op::Subtract, 1),
@@ -129,11 +141,14 @@ impl Op {
             13 => (Op::Less, 1),
             14 => (Op::Print, 1),
             15 => (Op::Pop, 1),
-            16 => (Op::DefineGlobal(read_one()?), 2),
-            17 => (Op::GetGlobal(read_one()?), 2),
-            18 => (Op::SetGlobal(read_one()?), 2),
-            19 => (Op::GetLocal(read_one()?), 2),
-            20 => (Op::SetLocal(read_one()?), 2),
+            16 => (Op::DefineGlobal(read_u8(&mut tail)?), 2),
+            17 => (Op::GetGlobal(read_u8(&mut tail)?), 2),
+            18 => (Op::SetGlobal(read_u8(&mut tail)?), 2),
+            19 => (Op::GetLocal(read_u8(&mut tail)?), 2),
+            20 => (Op::SetLocal(read_u8(&mut tail)?), 2),
+            21 => (Op::JumpIfFalse(read_u16(&mut tail)?), 3),
+            22 => (Op::Jump(read_u16(&mut tail)?), 3),
+            23 => (Op::JumpBack(read_u16(&mut tail)?), 3),
             _ => return Err(Box::new(InvalidBytecodeError::UnknownOpCode { op_code })),
         })
     }
@@ -141,6 +156,9 @@ impl Op {
     pub fn write(&self, buffer: &mut Vec<u8>) {
         buffer.push(self.op_code());
         match self {
+            Op::JumpIfFalse(i) | Op::Jump(i) | Op::JumpBack(i) => {
+                buffer.extend(i.to_le_bytes());
+            }
             Op::Constant(i)
             | Op::DefineGlobal(i)
             | Op::GetGlobal(i)
@@ -190,6 +208,9 @@ impl Op {
             Op::SetGlobal(_) => "SET_GLOBAL",
             Op::GetLocal(_) => "GET_LOCAL",
             Op::SetLocal(_) => "SET_LOCAL",
+            Op::JumpIfFalse(_) => "JUMP_IF_FALSE",
+            Op::Jump(_) => "JUMP",
+            Op::JumpBack(_) => "JUMP_BACK",
         };
         let tail = match self {
             Op::Constant(i) | Op::DefineGlobal(i) | Op::GetGlobal(i) | Op::SetGlobal(i) => {
@@ -198,6 +219,9 @@ impl Op {
             }
             Op::GetLocal(i) | Op::SetLocal(i) => {
                 format!("{i}")
+            }
+            Op::JumpIfFalse(i) | Op::Jump(i) | Op::JumpBack(i) => {
+                format!("{:04}", offset as i64 + 3 + *i as i64)
             }
             _ => String::new(),
         };
@@ -245,6 +269,11 @@ impl Op {
             "SET_GLOBAL" => Op::SetGlobal(read_constant()),
             "GET_LOCAL" => Op::GetLocal(read_constant()),
             "SET_LOCAL" => Op::SetLocal(read_constant()),
+            "JUMP_IF_FALSE" => {
+                panic!("JUMP_IF_FALSE has yet to be implemented in the disassembler")
+            }
+            "JUMP" => panic!("JUMP has yet to be implemented in the disassembler"),
+            "JUMP_BACK" => panic!("JUMP has yet to be implemented in the disassembler"),
             _ => panic!("unknown command {}", words[1]),
         };
         Some(op)
@@ -273,6 +302,9 @@ impl Op {
             Op::SetGlobal(_) => 18,
             Op::GetLocal(_) => 19,
             Op::SetLocal(_) => 20,
+            Op::JumpIfFalse(_) => 21,
+            Op::Jump(_) => 22,
+            Op::JumpBack(_) => 23,
         }
     }
 }

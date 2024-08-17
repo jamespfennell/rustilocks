@@ -9,6 +9,7 @@ pub struct RuntimeError {
     pub kind: RuntimeErrorKind,
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum RuntimeErrorKind {
     InvalidBytecode(InvalidBytecodeError),
@@ -41,6 +42,7 @@ impl Display for RuntimeError {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 pub enum InvalidBytecodeError {
     ValueStackTooSmall {
@@ -112,7 +114,7 @@ impl<'a> CompilationError {
             Some(&self.at)
         }
     }
-    pub fn message(&self) -> &'static str {
+    pub fn message(&self) -> String {
         use CompilationErrorKind::*;
         match self.kind {
             ExpectedExpression => "Expect expression.",
@@ -121,11 +123,14 @@ impl<'a> CompilationError {
             ExpectedIdentifier => "Expect variable name.",
             LocalRedeclared => "Already a variable with this name in this scope.",
             LocalUninitialized => "Can't read local variable in its own initializer.",
+            Todo(i) => {
+                return format!["TODO({i})"];
+            }
             _ => {
-                println!("{:?}", self);
-                "todo"
+                return format!["{self:?}"];
             }
         }
+        .into()
     }
 }
 

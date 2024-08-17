@@ -35,7 +35,7 @@ struct Local {
 
 impl<'a> Compiler<'a> {
     fn expression(&mut self) -> Result<(), Box<CompilationError>> {
-        self.parse_precendence(Precedence::Assignment)
+        self.parse_precedence(Precedence::Assignment)
     }
 
     fn declaration(&mut self) -> Result<(), Box<CompilationError>> {
@@ -133,17 +133,128 @@ impl<'a> Compiler<'a> {
                 self.emit_op(Op::Print);
             }
             TokenType::LeftBrace => {
-                self.scope_depth += 1;
+                self.begin_scope();
                 self.scanner.consume()?;
                 self.block(next)?;
-                while let Some(local) = self.locals.last().cloned() {
-                    if local.depth < self.scope_depth {
-                        break;
+                self.end_scope();
+            }
+            TokenType::If => {
+                self.scanner.consume()?;
+                consume_specific_token(&mut self.scanner, TokenType::LeftParen, |_| {
+                    CompilationErrorKind::Todo(5)
+                })?;
+                self.expression()?;
+                consume_specific_token(&mut self.scanner, TokenType::RightParen, |_| {
+                    CompilationErrorKind::Todo(6)
+                })?;
+
+                let jump_over_if = Jump::new(self, Op::JumpIfFalse);
+                // The JumpIfFalse op leaves the true value on the top of the stack
+                // if the jump is not taken. So we need to pop it off.
+                self.emit_op(Op::Pop);
+                self.statement()?;
+                let jump_over_else = Jump::new(self, Op::Jump);
+                jump_over_if.jump_to_here(self);
+                // The JumpIfFalse op leaves the false value on the top of the stack
+                // if the jump is taken. So we need to pop it off.
+                self.emit_op(Op::Pop);
+                if let Some(Token {
+                    token_type: TokenType::Else,
+                    ..
+                }) = self.scanner.peek()?
+                {
+                    self.scanner.consume()?;
+                    self.statement()?;
+                };
+                jump_over_else.jump_to_here(self);
+            }
+            TokenType::While => {
+                self.scanner.consume()?;
+                let while_block_start = self.chunk.bytecode.len();
+                consume_specific_token(&mut self.scanner, TokenType::LeftParen, |_| {
+                    CompilationErrorKind::Todo(7)
+                })?;
+                self.expression()?;
+                consume_specific_token(&mut self.scanner, TokenType::RightParen, |_| {
+                    CompilationErrorKind::Todo(8)
+                })?;
+                let jump_over_while = Jump::new(self, Op::JumpIfFalse);
+                self.emit_op(Op::Pop);
+                self.statement()?;
+                self.jump_back(while_block_start);
+                jump_over_while.jump_to_here(self);
+                self.emit_op(Op::Pop);
+            }
+            TokenType::For => {
+                self.scanner.consume()?;
+                self.begin_scope();
+                consume_specific_token(&mut self.scanner, TokenType::LeftParen, |_| {
+                    CompilationErrorKind::Todo(9)
+                })?;
+
+                // initializer
+                match self.scanner.peek()?.map(|t| t.token_type) {
+                    Some(TokenType::Var) => self.declaration()?,
+                    Some(TokenType::Semicolon) => {
+                        // empty initializer
+                        self.scanner.consume()?;
                     }
-                    self.emit_op(Op::Pop);
-                    self.locals.pop();
+                    _ => {
+                        // TODO: replace with expression statement?
+                        self.expression()?;
+                        consume_specific_token(&mut self.scanner, TokenType::Semicolon, |_| {
+                            CompilationErrorKind::Todo(10)
+                        })?;
+                        self.emit_op(Op::Pop);
+                    }
                 }
-                self.scope_depth -= 1;
+
+                // condition
+                let condition_start = self.chunk.bytecode.len();
+                let jump_if_false = match self.scanner.peek()?.map(|t| t.token_type) {
+                    Some(TokenType::Semicolon) => {
+                        // empty condition
+                        self.scanner.consume()?;
+                        None
+                    }
+                    _ => {
+                        self.expression()?;
+                        let jump_if_false = Jump::new(self, Op::JumpIfFalse);
+                        self.emit_op(Op::Pop);
+                        consume_specific_token(&mut self.scanner, TokenType::Semicolon, |_| {
+                            CompilationErrorKind::Todo(10)
+                        })?;
+                        Some(jump_if_false)
+                    }
+                };
+                let jump_if_true = Jump::new(self, Op::Jump);
+
+                // increment
+                let incrementent_start = self.chunk.bytecode.len();
+                match self.scanner.peek()?.map(|t| t.token_type) {
+                    Some(TokenType::RightParen) => {
+                        // empty increment
+                        self.scanner.consume()?;
+                    }
+                    _ => {
+                        self.expression()?;
+                        self.emit_op(Op::Pop);
+                        consume_specific_token(&mut self.scanner, TokenType::RightParen, |_| {
+                            CompilationErrorKind::Todo(13)
+                        })?;
+                    }
+                }
+                self.jump_back(condition_start);
+
+                // for loop block
+                jump_if_true.jump_to_here(self);
+                self.statement()?;
+                self.jump_back(incrementent_start);
+                if let Some(jump_if_false) = jump_if_false {
+                    jump_if_false.jump_to_here(self);
+                    self.emit_op(Op::Pop);
+                }
+                self.end_scope();
             }
             // Expression statement
             _ => {
@@ -182,7 +293,7 @@ impl<'a> Compiler<'a> {
         Ok(())
     }
 
-    fn parse_precendence(&mut self, precedence: Precedence) -> Result<(), Box<CompilationError>> {
+    fn parse_precedence(&mut self, precedence: Precedence) -> Result<(), Box<CompilationError>> {
         let token = match self.scanner.next()? {
             None => return Ok(()),
             Some(token) => token,
@@ -263,6 +374,66 @@ impl<'a> Compiler<'a> {
             })),
         }
     }
+
+    fn jump_back(&mut self, to: usize) {
+        let offset: u16 = self
+            .chunk
+            .bytecode
+            .len()
+            .checked_sub(to)
+            .expect("bytecode array is non-decreasing in length")
+            .try_into()
+            .unwrap();
+        self.emit_op(Op::JumpBack(offset));
+    }
+
+    fn begin_scope(&mut self) {
+        self.scope_depth += 1;
+    }
+
+    fn end_scope(&mut self) {
+        while let Some(local) = self.locals.last().cloned() {
+            if local.depth < self.scope_depth {
+                break;
+            }
+            self.emit_op(Op::Pop);
+            self.locals.pop();
+        }
+        self.scope_depth -= 1;
+    }
+}
+
+struct Jump {
+    op: fn(u16) -> Op,
+    op_idx: usize,
+    block_start: usize,
+}
+
+impl Jump {
+    fn new(c: &mut Compiler, op: fn(u16) -> Op) -> Self {
+        let op_idx = c.chunk.bytecode.len();
+        c.emit_op(op(0));
+        Self {
+            op,
+            op_idx,
+            block_start: c.chunk.bytecode.len(),
+        }
+    }
+    fn jump_to_here(self, c: &mut Compiler) {
+        let offset: u16 = c
+            .chunk
+            .bytecode
+            .len()
+            .checked_sub(self.block_start)
+            .expect("bytecode array is non-decreasing in length")
+            .try_into()
+            .unwrap();
+        let mut v = vec![];
+        (self.op)(offset).write(&mut v);
+        for (i, b) in v.iter().enumerate() {
+            c.chunk.bytecode[i + self.op_idx] = *b;
+        }
+    }
 }
 
 fn consume_specific_token<'a>(
@@ -294,8 +465,8 @@ fn consume_specific_token<'a>(
 enum Precedence {
     None = 0,
     Assignment = 1, // =
-    // Or = 2,         // or
-    // And = 3,        // and
+    Or = 2,         // or
+    And = 3,        // and
     Equality = 4,   // == !=
     Comparison = 5, // < > <= >=
     Term = 6,       // + -
@@ -340,7 +511,7 @@ fn get_rules<'a>(
         TokenType::Number => (Some(prefix_number), None, Precedence::None),
 
         // Keywords
-        TokenType::And => (None, None, Precedence::None),
+        TokenType::And => (None, Some(infix_and), Precedence::And),
         TokenType::Class => (None, None, Precedence::None),
         TokenType::Else => (None, None, Precedence::None),
         TokenType::False => (Some(prefix_false), None, Precedence::None),
@@ -348,7 +519,7 @@ fn get_rules<'a>(
         TokenType::Fun => (None, None, Precedence::None),
         TokenType::If => (None, None, Precedence::None),
         TokenType::Nil => (Some(prefix_nil), None, Precedence::None),
-        TokenType::Or => (None, None, Precedence::None),
+        TokenType::Or => (None, Some(infix_or), Precedence::Or),
         TokenType::Print => (None, None, Precedence::None),
         TokenType::Return => (None, None, Precedence::None),
         TokenType::Super => (None, None, Precedence::None),
@@ -359,8 +530,6 @@ fn get_rules<'a>(
     }
 }
 
-// TODO: if this turns out to be the only infix function then we should refactor the code to
-// not go through the rules at all. This way we could avoid double matching on the token type.
 fn infix_binary(c: &mut Compiler, token: Token, _: bool) -> Result<(), Box<CompilationError>> {
     let (next_precedence, op_1, op_2) = match token.token_type {
         TokenType::Plus => (Precedence::Factor, Op::Add, None),
@@ -375,7 +544,7 @@ fn infix_binary(c: &mut Compiler, token: Token, _: bool) -> Result<(), Box<Compi
         TokenType::LessEqual => (Precedence::Term, Op::Greater, Some(Op::Not)),
         _ => unreachable!(),
     };
-    c.parse_precendence(next_precedence)?;
+    c.parse_precedence(next_precedence)?;
     c.emit_op(op_1);
     if let Some(op_2) = op_2 {
         c.emit_op(op_2);
@@ -383,8 +552,26 @@ fn infix_binary(c: &mut Compiler, token: Token, _: bool) -> Result<(), Box<Compi
     Ok(())
 }
 
+fn infix_or(c: &mut Compiler, _: Token, _: bool) -> Result<(), Box<CompilationError>> {
+    let jump_if_false = Jump::new(c, Op::JumpIfFalse);
+    let jump_if_true = Jump::new(c, Op::Jump);
+    jump_if_false.jump_to_here(c);
+    c.emit_op(Op::Pop);
+    c.parse_precedence(Precedence::Or)?;
+    jump_if_true.jump_to_here(c);
+    Ok(())
+}
+
+fn infix_and(c: &mut Compiler, _: Token, _: bool) -> Result<(), Box<CompilationError>> {
+    let jump = Jump::new(c, Op::JumpIfFalse);
+    c.emit_op(Op::Pop);
+    c.parse_precedence(Precedence::And)?;
+    jump.jump_to_here(c);
+    Ok(())
+}
+
 fn prefix_bang(c: &mut Compiler, _: Token, _: bool) -> Result<(), Box<CompilationError>> {
-    c.parse_precendence(Precedence::Unary)?;
+    c.parse_precedence(Precedence::Unary)?;
     c.emit_op(Op::Not);
     Ok(())
 }
@@ -403,7 +590,7 @@ fn prefix_left_paren(c: &mut Compiler, _: Token, _: bool) -> Result<(), Box<Comp
 }
 
 fn prefix_minus(c: &mut Compiler, _: Token, _: bool) -> Result<(), Box<CompilationError>> {
-    c.parse_precendence(Precedence::Unary)?;
+    c.parse_precedence(Precedence::Unary)?;
     c.emit_op(Op::Negate);
     Ok(())
 }

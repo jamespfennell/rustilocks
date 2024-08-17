@@ -41,7 +41,7 @@ impl VM {
                     }));
                 }
             };
-            let new_ip_offset = ip_offset + increment as usize;
+            let mut new_ip_offset = ip_offset + increment as usize;
             match op {
                 Op::Return => return Ok(()),
                 Op::Constant(i) => {
@@ -162,6 +162,27 @@ impl VM {
                     *value_stack
                         .get_mut(i as usize)
                         .expect("local references valid index of stack") = value;
+                }
+                Op::JumpIfFalse(i) => {
+                    let value = pop_one(&mut value_stack, op)?;
+                    if value.is_falsey() {
+                        new_ip_offset = new_ip_offset
+                            .checked_add(i as usize)
+                            .expect("todo check jump_if_false bounds");
+                    }
+                    // TODO: add a peek function so we don't have to push back on.
+                    // Variable assignment could also use this peek function.
+                    value_stack.push(value);
+                }
+                Op::Jump(i) => {
+                    new_ip_offset = new_ip_offset
+                        .checked_add(i as usize)
+                        .expect("todo check jump bounds");
+                }
+                Op::JumpBack(i) => {
+                    new_ip_offset = ip_offset
+                        .checked_sub(i as usize)
+                        .expect("todo check jump_back bounds");
                 }
             }
             ip_offset = new_ip_offset;
