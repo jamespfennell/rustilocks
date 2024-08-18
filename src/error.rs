@@ -71,14 +71,14 @@ impl From<InvalidBytecodeError> for RuntimeErrorKind {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CompilationError {
     pub line_number: usize,
     pub at: String,
     pub kind: CompilationErrorKind,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum CompilationErrorKind {
     Todo(usize),
     //
@@ -86,6 +86,7 @@ pub enum CompilationErrorKind {
     UnterminatedString,
     TooManyConstants,
     ExpectedExpression,
+    ExpectedSemicolonAfterExpression,
     ExpectedIdentifier,
     InvalidNumber,
     InvalidAssignmentTarget,
@@ -93,15 +94,16 @@ pub enum CompilationErrorKind {
     TooManyLocals,
     LocalRedeclared,
     LocalUninitialized,
+    LoopTooLarge,
 }
 
 impl<'a> CompilationError {
-    pub fn new(token: Token, kind: CompilationErrorKind) -> Box<Self> {
-        Box::new(Self {
+    pub fn new(token: Token, kind: CompilationErrorKind) -> Self {
+        Self {
             line_number: token.line_number,
             at: token.source.into(),
             kind,
-        })
+        }
     }
     pub fn line_number(&self) -> usize {
         self.line_number
@@ -121,8 +123,10 @@ impl<'a> CompilationError {
             InvalidAssignmentTarget => "Invalid assignment target.",
             UnterminatedString => "Unterminated string.",
             ExpectedIdentifier => "Expect variable name.",
+            ExpectedSemicolonAfterExpression => "Expect ';' after expression.",
             LocalRedeclared => "Already a variable with this name in this scope.",
             LocalUninitialized => "Can't read local variable in its own initializer.",
+            LoopTooLarge => "Loop body too large.",
             Todo(i) => {
                 return format!["TODO({i})"];
             }
@@ -141,5 +145,34 @@ impl Display for CompilationError {
             write!(f, " at '{}'", at)?;
         }
         write!(f, ": {}", self.message())
+    }
+}
+
+#[derive(Default)]
+pub struct Accumulator {
+    errors: Vec<CompilationError>,
+    panic_mode: bool,
+}
+
+impl Accumulator {
+    pub fn add(&mut self, error: CompilationError) {
+        if self.panic_mode {
+            return;
+        }
+        self.panic_mode = true;
+        self.errors.push(error);
+    }
+    pub fn panic_mode(&self) -> bool {
+        self.panic_mode
+    }
+    pub fn reset_panic_mode(&mut self) {
+        self.panic_mode = false;
+    }
+    pub fn propagate(self) -> Result<(), Vec<CompilationError>> {
+        if self.errors.is_empty() {
+            Ok(())
+        } else {
+            Err(self.errors)
+        }
     }
 }

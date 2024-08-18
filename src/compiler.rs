@@ -1,29 +1,37 @@
 use crate::chunk;
 use crate::chunk::Op;
+use crate::error;
 use crate::error::*;
 use crate::scanner::{self, Token, TokenType};
 use crate::value::loxstring::LoxString;
 use crate::value::Value;
 
-pub fn compile(src: &str) -> Result<chunk::Chunk, Box<CompilationError>> {
+pub fn compile(src: &str) -> Result<chunk::Chunk, Vec<CompilationError>> {
     let mut compiler = Compiler {
         scanner: scanner::Scanner::new(src),
+        scanner_current: None,
+        scanner_previous: None,
         chunk: Default::default(),
         locals: vec![],
         scope_depth: 0,
+        errors: Default::default(),
     };
-    while compiler.scanner.peek()?.is_some() {
-        compiler.declaration()?;
+    while compiler.scanner_peek().is_some() {
+        compiler.declaration();
     }
     compiler.emit_op(Op::Return);
+    compiler.errors.propagate()?;
     Ok(compiler.chunk)
 }
 
 struct Compiler<'a> {
     scanner: scanner::Scanner<'a>,
+    scanner_current: Option<Token<'a>>,
+    scanner_previous: Option<Token<'a>>,
     chunk: chunk::Chunk,
     locals: Vec<Local>,
     scope_depth: usize,
+    errors: error::Accumulator,
 }
 
 #[derive(Clone, Debug)]
@@ -34,27 +42,27 @@ struct Local {
 }
 
 impl<'a> Compiler<'a> {
-    fn expression(&mut self) -> Result<(), Box<CompilationError>> {
+    fn expression(&mut self) {
         self.parse_precedence(Precedence::Assignment)
     }
 
-    fn declaration(&mut self) -> Result<(), Box<CompilationError>> {
-        let next = match self.scanner.peek()? {
-            None => return Ok(()),
+    fn declaration(&mut self) {
+        let next = match self.scanner_peek() {
+            None => return,
             Some(next) => next,
         };
         match next.token_type {
             TokenType::Var => {
-                self.scanner.consume()?;
-                let name_token =
-                    consume_specific_token(&mut self.scanner, TokenType::Identifier, |_| {
-                        CompilationErrorKind::ExpectedIdentifier
-                    })?;
-                let name = self.chunk.string_interner.intern_ref(name_token.source);
+                self.scanner_consume();
+                let name_raw = self.consume(
+                    TokenType::Identifier,
+                    CompilationErrorKind::ExpectedIdentifier,
+                );
+                let name = self.chunk.string_interner.intern_ref(name_raw);
 
                 let define_global_op = if self.scope_depth == 0 {
                     // Global var declarations
-                    let constant_i = self.add_constant(name_token, Value::String(name))?;
+                    let constant_i = self.add_constant(Value::String(name));
                     Some(Op::DefineGlobal(constant_i))
                 } else {
                     // Local var declarations
@@ -64,19 +72,19 @@ impl<'a> Compiler<'a> {
                             break;
                         }
                         if local.name == name {
-                            return Err(Box::new(CompilationError {
+                            self.errors.add(CompilationError {
                                 line_number: self.scanner.line_number(),
-                                at: name_token.source.into(),
+                                at: name_raw.into(),
                                 kind: CompilationErrorKind::LocalRedeclared,
-                            }));
+                            });
                         }
                     }
                     if self.locals.len() == 256 {
-                        return Err(Box::new(CompilationError {
+                        self.errors.add(CompilationError {
                             line_number: self.scanner.line_number(),
                             at: "".into(),
                             kind: CompilationErrorKind::TooManyLocals,
-                        }));
+                        });
                     }
                     self.locals.push(Local {
                         name,
@@ -86,19 +94,17 @@ impl<'a> Compiler<'a> {
                     None
                 };
 
-                match self.scanner.peek()? {
+                match self.scanner_peek() {
                     Some(Token {
                         token_type: TokenType::Equal,
                         ..
                     }) => {
-                        self.scanner.consume()?;
-                        self.expression()?
+                        self.scanner_consume();
+                        self.expression();
                     }
                     _ => self.emit_op(Op::Nil),
                 };
-                consume_specific_token(&mut self.scanner, TokenType::Semicolon, |_at| {
-                    CompilationErrorKind::Todo(1)
-                })?;
+                self.consume(TokenType::Semicolon, CompilationErrorKind::Todo(1));
 
                 match define_global_op {
                     None => {
@@ -111,48 +117,70 @@ impl<'a> Compiler<'a> {
                         self.emit_op(op);
                     }
                 }
-
-                Ok(())
             }
             _ => self.statement(),
         }
+
+        // Synchronize
+        if self.errors.panic_mode() {
+            loop {
+                if let Some(Token {
+                    token_type: TokenType::Semicolon,
+                    ..
+                }) = self.scanner_last()
+                {
+                    break;
+                }
+                let next = match self.scanner_peek() {
+                    None => break,
+                    Some(next) => next,
+                };
+                match next.token_type {
+                    TokenType::Class
+                    | TokenType::Fun
+                    | TokenType::Var
+                    | TokenType::For
+                    | TokenType::If
+                    | TokenType::While
+                    | TokenType::Print
+                    | TokenType::Return => break,
+                    _ => {}
+                }
+                self.scanner_consume();
+            }
+            self.errors.reset_panic_mode();
+        }
     }
 
-    fn statement(&mut self) -> Result<(), Box<CompilationError>> {
-        let next = match self.scanner.peek()? {
-            None => return Ok(()),
+    fn statement(&mut self) {
+        let next = match self.scanner_peek() {
+            None => return,
             Some(next) => next,
         };
         match next.token_type {
             TokenType::Print => {
-                self.scanner.consume()?;
-                self.expression()?;
-                consume_specific_token(&mut self.scanner, TokenType::Semicolon, |_| {
-                    CompilationErrorKind::Todo(2)
-                })?;
+                self.scanner_consume();
+                self.expression();
+                self.consume(TokenType::Semicolon, CompilationErrorKind::Todo(2));
                 self.emit_op(Op::Print);
             }
             TokenType::LeftBrace => {
                 self.begin_scope();
-                self.scanner.consume()?;
-                self.block(next)?;
+                self.scanner_consume();
+                self.block(next);
                 self.end_scope();
             }
             TokenType::If => {
-                self.scanner.consume()?;
-                consume_specific_token(&mut self.scanner, TokenType::LeftParen, |_| {
-                    CompilationErrorKind::Todo(5)
-                })?;
-                self.expression()?;
-                consume_specific_token(&mut self.scanner, TokenType::RightParen, |_| {
-                    CompilationErrorKind::Todo(6)
-                })?;
+                self.scanner_consume();
+                self.consume(TokenType::LeftParen, CompilationErrorKind::Todo(5));
+                self.expression();
+                self.consume(TokenType::RightParen, CompilationErrorKind::Todo(6));
 
                 let jump_over_if = Jump::new(self, Op::JumpIfFalse);
                 // The JumpIfFalse op leaves the true value on the top of the stack
                 // if the jump is not taken. So we need to pop it off.
                 self.emit_op(Op::Pop);
-                self.statement()?;
+                self.statement();
                 let jump_over_else = Jump::new(self, Op::Jump);
                 jump_over_if.jump_to_here(self);
                 // The JumpIfFalse op leaves the false value on the top of the stack
@@ -161,158 +189,143 @@ impl<'a> Compiler<'a> {
                 if let Some(Token {
                     token_type: TokenType::Else,
                     ..
-                }) = self.scanner.peek()?
+                }) = self.scanner_peek()
                 {
-                    self.scanner.consume()?;
-                    self.statement()?;
+                    self.scanner_consume();
+                    self.statement();
                 };
                 jump_over_else.jump_to_here(self);
             }
             TokenType::While => {
-                self.scanner.consume()?;
+                self.scanner_consume();
                 let while_block_start = self.chunk.bytecode.len();
-                consume_specific_token(&mut self.scanner, TokenType::LeftParen, |_| {
-                    CompilationErrorKind::Todo(7)
-                })?;
-                self.expression()?;
-                consume_specific_token(&mut self.scanner, TokenType::RightParen, |_| {
-                    CompilationErrorKind::Todo(8)
-                })?;
+                self.consume(TokenType::LeftParen, CompilationErrorKind::Todo(7));
+                self.expression();
+                self.consume(TokenType::RightParen, CompilationErrorKind::Todo(8));
                 let jump_over_while = Jump::new(self, Op::JumpIfFalse);
                 self.emit_op(Op::Pop);
-                self.statement()?;
+                self.statement();
                 self.jump_back(while_block_start);
                 jump_over_while.jump_to_here(self);
                 self.emit_op(Op::Pop);
             }
             TokenType::For => {
-                self.scanner.consume()?;
+                self.scanner_consume();
                 self.begin_scope();
-                consume_specific_token(&mut self.scanner, TokenType::LeftParen, |_| {
-                    CompilationErrorKind::Todo(9)
-                })?;
+                self.consume(TokenType::LeftParen, CompilationErrorKind::Todo(9));
 
                 // initializer
-                match self.scanner.peek()?.map(|t| t.token_type) {
-                    Some(TokenType::Var) => self.declaration()?,
+                match self.scanner_peek().map(|t| t.token_type) {
                     Some(TokenType::Semicolon) => {
                         // empty initializer
-                        self.scanner.consume()?;
+                        self.scanner_consume();
                     }
-                    _ => {
-                        // TODO: replace with expression statement?
-                        self.expression()?;
-                        consume_specific_token(&mut self.scanner, TokenType::Semicolon, |_| {
-                            CompilationErrorKind::Todo(10)
-                        })?;
-                        self.emit_op(Op::Pop);
-                    }
+                    Some(TokenType::Var) => self.declaration(),
+                    _ => self.expression_statement(),
                 }
 
                 // condition
                 let condition_start = self.chunk.bytecode.len();
-                let jump_if_false = match self.scanner.peek()?.map(|t| t.token_type) {
+                let jump_if_false = match self.scanner_peek().map(|t| t.token_type) {
                     Some(TokenType::Semicolon) => {
                         // empty condition
-                        self.scanner.consume()?;
+                        self.scanner_consume();
                         None
                     }
                     _ => {
-                        self.expression()?;
+                        self.expression();
                         let jump_if_false = Jump::new(self, Op::JumpIfFalse);
                         self.emit_op(Op::Pop);
-                        consume_specific_token(&mut self.scanner, TokenType::Semicolon, |_| {
-                            CompilationErrorKind::Todo(10)
-                        })?;
+                        self.consume(TokenType::Semicolon, CompilationErrorKind::Todo(10));
                         Some(jump_if_false)
                     }
                 };
                 let jump_if_true = Jump::new(self, Op::Jump);
 
                 // increment
-                let incrementent_start = self.chunk.bytecode.len();
-                match self.scanner.peek()?.map(|t| t.token_type) {
+                let increment_start = self.chunk.bytecode.len();
+                match self.scanner_peek().map(|t| t.token_type) {
                     Some(TokenType::RightParen) => {
                         // empty increment
-                        self.scanner.consume()?;
+                        self.scanner_consume();
                     }
                     _ => {
-                        self.expression()?;
+                        self.expression();
                         self.emit_op(Op::Pop);
-                        consume_specific_token(&mut self.scanner, TokenType::RightParen, |_| {
-                            CompilationErrorKind::Todo(13)
-                        })?;
+                        self.consume(TokenType::RightParen, CompilationErrorKind::Todo(13));
                     }
                 }
                 self.jump_back(condition_start);
 
                 // for loop block
                 jump_if_true.jump_to_here(self);
-                self.statement()?;
-                self.jump_back(incrementent_start);
+                self.statement();
+                self.jump_back(increment_start);
                 if let Some(jump_if_false) = jump_if_false {
                     jump_if_false.jump_to_here(self);
                     self.emit_op(Op::Pop);
                 }
                 self.end_scope();
             }
-            // Expression statement
-            _ => {
-                self.expression()?;
-                consume_specific_token(&mut self.scanner, TokenType::Semicolon, |_| {
-                    CompilationErrorKind::Todo(3)
-                })?;
-                self.emit_op(Op::Pop);
-            }
+            _ => self.expression_statement(),
         }
-        Ok(())
     }
 
-    fn block(&mut self, opening_token: Token<'a>) -> Result<(), Box<CompilationError>> {
+    fn expression_statement(&mut self) {
+        self.expression();
+        self.consume(
+            TokenType::Semicolon,
+            CompilationErrorKind::ExpectedSemicolonAfterExpression,
+        );
+        self.emit_op(Op::Pop);
+    }
+
+    fn block(&mut self, opening_token: Token<'a>) {
         loop {
-            match self.scanner.peek()? {
+            match self.scanner_peek() {
                 None => {
-                    return Err(Box::new(CompilationError {
+                    self.errors.add(CompilationError {
                         line_number: opening_token.line_number,
                         at: "".into(),
                         kind: CompilationErrorKind::UnclosedBlock,
-                    }))
+                    });
+                    return;
                 }
                 Some(Token {
                     token_type: TokenType::RightBrace,
                     ..
                 }) => {
-                    self.scanner.consume()?;
+                    self.scanner_consume();
                     break;
                 }
                 _ => {
-                    self.declaration()?;
+                    self.declaration();
                 }
             }
         }
-        Ok(())
     }
 
-    fn parse_precedence(&mut self, precedence: Precedence) -> Result<(), Box<CompilationError>> {
-        let token = match self.scanner.next()? {
-            None => return Ok(()),
+    fn parse_precedence(&mut self, precedence: Precedence) {
+        let token = match self.scanner_next() {
+            None => return,
             Some(token) => token,
         };
         let (prefix_rule, _, _) = get_rules(token.token_type);
         let prefix_rule = match prefix_rule {
             None => {
-                return Err(CompilationError::new(
+                self.errors.add(CompilationError::new(
                     token,
                     CompilationErrorKind::ExpectedExpression,
-                ))
+                ));
+                return;
             }
             Some(prefix_rule) => prefix_rule,
         };
         let can_assign = precedence <= Precedence::Assignment;
-        prefix_rule(self, token, can_assign)?;
+        prefix_rule(self, token, can_assign);
 
         loop {
-            let token = match self.scanner.peek()? {
+            let token = match self.scanner_peek() {
                 None => break,
                 Some(token) => token,
             };
@@ -325,22 +338,21 @@ impl<'a> Compiler<'a> {
                 None => break,
                 Some(infix_rule) => infix_rule,
             };
-            self.scanner.consume()?;
-            infix_rule(self, token, can_assign)?;
+            self.scanner_consume();
+            infix_rule(self, token, can_assign);
         }
         // By this point we've compiled a full expression. The only case where we can assign to
         // the expression is if it's an identifier. In this case, the prefix_rule above is prefix_variable,
         // and that function consumed the trailing equals token. Thus if there is an equals sign here
         // it means that code path wasn't taken, and the expression cannot be assigned to.
         if can_assign {
-            if let Some(token) = match_token_type(&mut self.scanner, TokenType::Equal)? {
-                return Err(CompilationError::new(
+            if let Some(token) = match_token_type(self, TokenType::Equal) {
+                self.errors.add(CompilationError::new(
                     token,
                     CompilationErrorKind::InvalidAssignmentTarget,
                 ));
             }
         }
-        Ok(())
     }
 
     fn emit_op(&mut self, op: Op) {
@@ -353,37 +365,46 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn add_constant(
-        &mut self,
-        token: Token<'a>,
-        constant: Value,
-    ) -> Result<u8, Box<CompilationError>> {
+    fn add_constant(&mut self, constant: Value) -> u8 {
         for (i, existing_constant) in self.chunk.constants.iter().enumerate() {
             if constant == *existing_constant {
-                return Ok(i.try_into().expect("there are only 256 constants"));
+                return i.try_into().expect("there are only 256 constants");
             }
         }
         let i = self.chunk.constants.len();
         self.chunk.constants.push(constant);
         match i.try_into() {
-            Ok(i) => Ok(i),
-            Err(_) => Err(Box::new(CompilationError {
-                line_number: token.line_number,
-                at: "".into(),
-                kind: CompilationErrorKind::TooManyConstants,
-            })),
+            Ok(i) => i,
+            Err(_) => {
+                self.errors.add(CompilationError {
+                    line_number: self.scanner.line_number(),
+                    at: "".into(),
+                    kind: CompilationErrorKind::TooManyConstants,
+                });
+                0
+            }
         }
     }
 
     fn jump_back(&mut self, to: usize) {
-        let offset: u16 = self
+        let offset: u16 = match self
             .chunk
             .bytecode
             .len()
             .checked_sub(to)
             .expect("bytecode array is non-decreasing in length")
             .try_into()
-            .unwrap();
+        {
+            Ok(offset) => offset,
+            Err(_) => {
+                self.errors.add(CompilationError {
+                    line_number: self.scanner.line_number(),
+                    at: "}".into(),
+                    kind: CompilationErrorKind::LoopTooLarge,
+                });
+                0
+            }
+        };
         self.emit_op(Op::JumpBack(offset));
     }
 
@@ -400,6 +421,68 @@ impl<'a> Compiler<'a> {
             self.locals.pop();
         }
         self.scope_depth -= 1;
+    }
+
+    fn consume(&mut self, token_type: TokenType, error_kind: CompilationErrorKind) -> &'a str {
+        match self.scanner_peek() {
+            None => {
+                self.errors.add(CompilationError {
+                    line_number: self.scanner.line_number(),
+                    at: "".into(),
+                    kind: error_kind,
+                });
+                ""
+            }
+            Some(token) => {
+                if token.token_type == token_type {
+                    self.scanner_consume();
+                    token.source
+                } else {
+                    self.errors.add(CompilationError {
+                        line_number: self.scanner.line_number(),
+                        at: token.source.into(),
+                        kind: error_kind,
+                    });
+                    ""
+                }
+            }
+        }
+    }
+
+    fn scanner_next(&mut self) -> Option<Token<'a>> {
+        let token_or = match self.scanner_current.take() {
+            Some(token) => Some(token),
+            None => loop {
+                match self.scanner.next() {
+                    Ok(token_or) => break token_or,
+                    Err(error) => self.errors.add(error),
+                }
+            },
+        };
+        self.scanner_previous = token_or;
+        token_or
+    }
+
+    fn scanner_peek(&mut self) -> Option<Token<'a>> {
+        let token_or = match self.scanner_current {
+            Some(token) => Some(token),
+            None => loop {
+                match self.scanner.next() {
+                    Ok(token_or) => break token_or,
+                    Err(error) => self.errors.add(error),
+                }
+            },
+        };
+        self.scanner_current = token_or;
+        token_or
+    }
+
+    fn scanner_last(&self) -> Option<Token<'a>> {
+        self.scanner_previous
+    }
+
+    fn scanner_consume(&mut self) {
+        self.scanner_next();
     }
 }
 
@@ -420,43 +503,28 @@ impl Jump {
         }
     }
     fn jump_to_here(self, c: &mut Compiler) {
-        let offset: u16 = c
+        let offset: u16 = match c
             .chunk
             .bytecode
             .len()
             .checked_sub(self.block_start)
             .expect("bytecode array is non-decreasing in length")
             .try_into()
-            .unwrap();
+        {
+            Ok(offset) => offset,
+            Err(_) => {
+                c.errors.add(CompilationError {
+                    line_number: c.scanner.line_number(),
+                    at: "}".into(),
+                    kind: CompilationErrorKind::LoopTooLarge,
+                });
+                0
+            }
+        };
         let mut v = vec![];
         (self.op)(offset).write(&mut v);
         for (i, b) in v.iter().enumerate() {
             c.chunk.bytecode[i + self.op_idx] = *b;
-        }
-    }
-}
-
-fn consume_specific_token<'a>(
-    scanner: &mut scanner::Scanner<'a>,
-    token_type: TokenType,
-    f: fn(token_or: &'a str) -> CompilationErrorKind,
-) -> Result<Token<'a>, Box<CompilationError>> {
-    match scanner.next()? {
-        None => Err(Box::new(CompilationError {
-            line_number: scanner.line_number(),
-            at: "".into(),
-            kind: f(""),
-        })),
-        Some(token) => {
-            if token.token_type == token_type {
-                Ok(token)
-            } else {
-                Err(Box::new(CompilationError {
-                    line_number: scanner.line_number(),
-                    at: token.source.into(),
-                    kind: f(token.source),
-                }))
-            }
         }
     }
 }
@@ -476,7 +544,7 @@ enum Precedence {
                     // Primary = 10,
 }
 
-type ParseRule<'a> = fn(s: &mut Compiler<'a>, Token<'a>, bool) -> Result<(), Box<CompilationError>>;
+type ParseRule<'a> = fn(s: &mut Compiler<'a>, Token<'a>, bool);
 
 fn get_rules<'a>(
     token_type: TokenType,
@@ -530,7 +598,7 @@ fn get_rules<'a>(
     }
 }
 
-fn infix_binary(c: &mut Compiler, token: Token, _: bool) -> Result<(), Box<CompilationError>> {
+fn infix_binary(c: &mut Compiler, token: Token, _: bool) {
     let (next_precedence, op_1, op_2) = match token.token_type {
         TokenType::Plus => (Precedence::Factor, Op::Add, None),
         TokenType::Minus => (Precedence::Factor, Op::Subtract, None),
@@ -544,115 +612,91 @@ fn infix_binary(c: &mut Compiler, token: Token, _: bool) -> Result<(), Box<Compi
         TokenType::LessEqual => (Precedence::Term, Op::Greater, Some(Op::Not)),
         _ => unreachable!(),
     };
-    c.parse_precedence(next_precedence)?;
+    c.parse_precedence(next_precedence);
     c.emit_op(op_1);
     if let Some(op_2) = op_2 {
         c.emit_op(op_2);
     }
-    Ok(())
 }
 
-fn infix_or(c: &mut Compiler, _: Token, _: bool) -> Result<(), Box<CompilationError>> {
+fn infix_or(c: &mut Compiler, _: Token, _: bool) {
     let jump_if_false = Jump::new(c, Op::JumpIfFalse);
     let jump_if_true = Jump::new(c, Op::Jump);
     jump_if_false.jump_to_here(c);
     c.emit_op(Op::Pop);
-    c.parse_precedence(Precedence::Or)?;
+    c.parse_precedence(Precedence::Or);
     jump_if_true.jump_to_here(c);
-    Ok(())
 }
 
-fn infix_and(c: &mut Compiler, _: Token, _: bool) -> Result<(), Box<CompilationError>> {
+fn infix_and(c: &mut Compiler, _: Token, _: bool) {
     let jump = Jump::new(c, Op::JumpIfFalse);
     c.emit_op(Op::Pop);
-    c.parse_precedence(Precedence::And)?;
+    c.parse_precedence(Precedence::And);
     jump.jump_to_here(c);
-    Ok(())
 }
 
-fn prefix_bang(c: &mut Compiler, _: Token, _: bool) -> Result<(), Box<CompilationError>> {
-    c.parse_precedence(Precedence::Unary)?;
+fn prefix_bang(c: &mut Compiler, _: Token, _: bool) {
+    c.parse_precedence(Precedence::Unary);
     c.emit_op(Op::Not);
-    Ok(())
 }
 
-fn prefix_false(c: &mut Compiler, _: Token, _: bool) -> Result<(), Box<CompilationError>> {
+fn prefix_false(c: &mut Compiler, _: Token, _: bool) {
     c.emit_op(Op::False);
-    Ok(())
 }
 
-fn prefix_left_paren(c: &mut Compiler, _: Token, _: bool) -> Result<(), Box<CompilationError>> {
-    c.expression()?;
-    consume_specific_token(&mut c.scanner, TokenType::RightParen, |_| {
-        CompilationErrorKind::Todo(4)
-    })?;
-    Ok(())
+fn prefix_left_paren(c: &mut Compiler, _: Token, _: bool) {
+    c.expression();
+    c.consume(TokenType::RightParen, CompilationErrorKind::Todo(4));
 }
 
-fn prefix_minus(c: &mut Compiler, _: Token, _: bool) -> Result<(), Box<CompilationError>> {
-    c.parse_precedence(Precedence::Unary)?;
+fn prefix_minus(c: &mut Compiler, _: Token, _: bool) {
+    c.parse_precedence(Precedence::Unary);
     c.emit_op(Op::Negate);
-    Ok(())
 }
 
-fn prefix_nil(c: &mut Compiler, _: Token, _: bool) -> Result<(), Box<CompilationError>> {
+fn prefix_nil(c: &mut Compiler, _: Token, _: bool) {
     c.emit_op(Op::Nil);
-    Ok(())
 }
 
-fn prefix_number<'a>(
-    s: &mut Compiler<'a>,
-    token: Token<'a>,
-    _: bool,
-) -> Result<(), Box<CompilationError>> {
+fn prefix_number<'a>(s: &mut Compiler<'a>, token: Token<'a>, _: bool) {
     let d = match token.source.parse::<f64>() {
         Ok(d) => d,
         Err(_) => {
-            return Err(CompilationError::new(
+            s.errors.add(CompilationError::new(
                 token,
                 CompilationErrorKind::InvalidNumber,
-            ))
+            ));
+            0_f64
         }
     };
-    let i = s.add_constant(token, Value::Number(d))?;
+    let i = s.add_constant(Value::Number(d));
     s.emit_op(Op::Constant(i));
-    Ok(())
 }
 
-fn prefix_string<'a>(
-    c: &mut Compiler<'a>,
-    token: Token<'a>,
-    _: bool,
-) -> Result<(), Box<CompilationError>> {
+fn prefix_string<'a>(c: &mut Compiler<'a>, token: Token<'a>, _: bool) {
     // We need to trim the opening and closing quotation marks.
     let s = &token.source[1..token.source.len() - 1];
     let value = Value::String(c.chunk.string_interner.intern_ref(s));
-    let i = c.add_constant(token, value)?;
+    let i = c.add_constant(value);
     c.emit_op(Op::Constant(i));
-    Ok(())
 }
 
-fn prefix_true(c: &mut Compiler, _: Token, _: bool) -> Result<(), Box<CompilationError>> {
+fn prefix_true(c: &mut Compiler, _: Token, _: bool) {
     c.emit_op(Op::True);
-    Ok(())
 }
 
-fn prefix_variable<'a>(
-    c: &mut Compiler<'a>,
-    token: Token<'a>,
-    can_assign: bool,
-) -> Result<(), Box<CompilationError>> {
+fn prefix_variable<'a>(c: &mut Compiler<'a>, token: Token<'a>, can_assign: bool) {
     let name = c.chunk.string_interner.intern_ref(token.source);
     let mut local_index: Option<u8> = None;
     for (i, local) in c.locals.iter().enumerate().rev() {
         if local.name == name {
             // Check that the variable has not been declared
             if !local.initialized {
-                return Err(Box::new(CompilationError {
+                c.errors.add(CompilationError {
                     line_number: token.line_number,
                     at: token.source.into(),
                     kind: CompilationErrorKind::LocalUninitialized,
-                }));
+                });
             }
             local_index = Some(i.try_into().expect("no more than 256 locals"));
             break;
@@ -661,31 +705,27 @@ fn prefix_variable<'a>(
     let (get_op, set_op) = match local_index {
         // Global variable: the arg is the index in the constants table.
         None => {
-            let i = c.add_constant(token, Value::String(name))?;
+            let i = c.add_constant(Value::String(name));
             (Op::GetGlobal(i), Op::SetGlobal(i))
         }
         // Local variable: the arg is the position on the stack.
         Some(i) => (Op::GetLocal(i), Op::SetLocal(i)),
     };
-    if can_assign && match_token_type(&mut c.scanner, TokenType::Equal)?.is_some() {
-        c.expression()?;
+    if can_assign && match_token_type(c, TokenType::Equal).is_some() {
+        c.expression();
         c.emit_op(set_op);
     } else {
         c.emit_op(get_op);
     };
-    Ok(())
 }
 
-fn match_token_type<'a>(
-    scanner: &mut scanner::Scanner<'a>,
-    token_type: TokenType,
-) -> Result<Option<Token<'a>>, Box<CompilationError>> {
-    let next_token = scanner.peek()?;
+fn match_token_type<'a>(c: &mut Compiler<'a>, token_type: TokenType) -> Option<Token<'a>> {
+    let next_token = c.scanner_peek();
     if next_token.map(|t| t.token_type) == Some(token_type) {
-        scanner.consume()?;
-        Ok(next_token)
+        c.scanner_next();
+        next_token
     } else {
-        Ok(None)
+        None
     }
 }
 

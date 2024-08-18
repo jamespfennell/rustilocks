@@ -100,8 +100,10 @@ fn main() {
             let chunk = match InputFile::read(&input) {
                 InputFile::Lox(src) => match compiler::compile(&src) {
                     Ok(chunk) => chunk,
-                    Err(e) => {
-                        eprintln!("{e}");
+                    Err(errors) => {
+                        for error in errors {
+                            eprintln!("{error}");
+                        }
                         // TODO: should copy clox's return exit codes
                         exit(65);
                     }
