@@ -29,8 +29,11 @@ The binary operates on 3 file formats:
 
 ## Status
 
-- Chapter 14-21: done
+- Chapter 14-23: done
 
-- Chapter 22: in progress.
+- Chapter 24: next up.
 
-- Chapter 24-29: to be started
+- Chapter 24-26: to be started
+
+- Chapter 27-29: I may not do these as OOP doesn't interest me that much.
+    Maybe instead I'll add support for struct/dataclasses?
