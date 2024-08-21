@@ -37,3 +37,34 @@ The binary operates on 3 file formats:
 
 - Chapter 27-29: I may not do these as OOP doesn't interest me that much.
     Maybe instead I'll add support for struct/dataclasses?
+
+## E2E diff testing
+
+The [Crafting Interpreter's repository](https://github.com/munificent/craftinginterpreters)
+    contains an awesome end-to-end Lox test suite and facilities for
+    running this suite over new implementations of the interpreter, like Rustilocks.
+However our experience is that this test suite is not 100% exhaustive,
+    especially on error edge cases.
+Adding new test cases to the test suite is a little tedious as one has to manually
+    annotate the Lox source files with the expected results,
+    and wire up the cases into the Dart test runner.
+
+As an alternative, this project uses diff testing,
+    in which the output of the Rustilocks interpreter and clox is compared
+    over arbitrary Lox source files.
+Adding a new test case just means adding an arbitrary new Lox file.
+
+To run the diff tests, clox has to be built first:
+
+```
+cd tests/craftinginterpreters && make clox && cd -
+```
+
+The diff tests are then run using the usual `cargo t` command.
+
+The test cases come from two sources:
+
+- The E2E test suite in the Crafting Interpreters repository.
+  The Lox files are at `tests/craftinginterpreters/test` in this repo.
+
+- Additional new Rustilocks test cases under `tests`.

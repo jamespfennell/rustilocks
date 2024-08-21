@@ -161,7 +161,7 @@ impl<'a> Compiler<'a> {
             TokenType::Print => {
                 self.scanner_consume();
                 self.expression();
-                self.consume(TokenType::Semicolon, CompilationErrorKind::Todo(2));
+                self.consume(TokenType::Semicolon, CompilationErrorKind::ExpectedSemicolonAfterValue);
                 self.emit_op(Op::Print);
             }
             TokenType::LeftBrace => {
