@@ -22,6 +22,8 @@ jobs:
           profile: minimal
           override: true
 
+      - name: build clox
+        run: cd tests/craftinginterpreters && make clox
       # todo
       #- name: Run Clippy
       #  uses: actions-rs/cargo@v1
